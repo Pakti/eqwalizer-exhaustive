@@ -9,20 +9,29 @@ package com.whatsapp.eqwalizer.ast
 import com.whatsapp.eqwalizer.ast.Types._
 
 enum Specifier {
-  case SignedInteger, UnsignedInteger, Float, Binary, Bytes, Bitstring, Bits, Utf8, Utf16, Utf32
+  case SignedIntegerSpecifier,
+    UnsignedIntegerSpecifier,
+    FloatSpecifier,
+    BinarySpecifier,
+    BytesSpecifier,
+    BitstringSpecifier,
+    BitsSpecifier,
+    Utf8Specifier,
+    Utf16Specifier,
+    Utf32Specifier
 }
 
 object Specifier {
   def expType(s: Specifier, stringLiteral: Boolean): Type =
     s match {
-      case UnsignedInteger | Utf8 | Utf16 | Utf32 =>
+      case UnsignedIntegerSpecifier | Utf8Specifier | Utf16Specifier | Utf32Specifier =>
         if (stringLiteral) stringType
         else NumberType
-      case SignedInteger =>
+      case SignedIntegerSpecifier =>
         NumberType
-      case Float =>
+      case FloatSpecifier =>
         floatType
-      case Binary | Bytes | Bitstring | Bits =>
+      case BinarySpecifier | BytesSpecifier | BitstringSpecifier | BitsSpecifier =>
         BinaryType
     }
 }
