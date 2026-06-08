@@ -69,7 +69,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         clauses.foreach(clause => checkBody(clause.body, env))
       case Block(body) =>
         checkBody(body, env)
-      case Match(PatVar(v), value) =>
+      case Match(PatVar(_), value) =>
         checkExpr(value, env)
       case Match(_, value) =>
         checkExpr(value, env)
@@ -156,26 +156,27 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       Some(entries.toMap)
     }
 
-  private def uncovered(c: Case, selType: Type): Option[List[Type]] = {
-    var remaining = simpleAlternatives(selType).map(_.distinct).getOrElse(return None)
-    val selAlias = c.expr match {
-      case Var(n)              => Some(n)
-      case Match(PatVar(n), _) => Some(n)
-      case _                   => None
-    }
-    for (clause <- c.clauses) {
-      clause.pats match {
-        case pat :: Nil =>
-          val PatternCover(patTy, aliases) = simplePatternCover(pat).getOrElse(return None)
-          val guardTy = simpleGuardCover(clause.guards, aliases ++ selAlias).getOrElse(return None)
-          val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
-          remaining = remaining.filterNot(covered.contains)
-        case _ =>
-          return None
+  private def uncovered(c: Case, selType: Type): Option[List[Type]] =
+    simpleAlternatives(selType).map(_.distinct).flatMap { alternatives =>
+      var remaining = alternatives
+      val selAlias = c.expr match {
+        case Var(n)              => Some(n)
+        case Match(PatVar(n), _) => Some(n)
+        case _                   => None
       }
+      val supported = c.clauses.forall {
+        case Clause(pat :: Nil, guards, _) =>
+          simplePatternCover(pat).flatMap { case PatternCover(patTy, aliases) =>
+            simpleGuardCover(guards, aliases ++ selAlias).map { guardTy =>
+              val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
+              remaining = remaining.filterNot(covered.contains)
+            }
+          }.isDefined
+        case _ =>
+          false
+      }
+      if (supported) Some(remaining) else None
     }
-    Some(remaining)
-  }
 
   private case class PatternCover(ty: Type, aliases: Set[String])
 
