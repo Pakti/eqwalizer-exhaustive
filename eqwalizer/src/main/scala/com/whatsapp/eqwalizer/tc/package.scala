@@ -1,7 +1,7 @@
 /* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
  *
  * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * the root directory of this source tree.
  */
 
 package com.whatsapp.eqwalizer
@@ -44,15 +44,15 @@ package object tc {
       new ElabPat(this)
     val occurrence: Occurrence =
       new Occurrence(this)
+    val exhaustiveCase: ExhaustiveCase =
+      new ExhaustiveCase(this)
     val customReturn: CustomReturn =
       new CustomReturn(this)
     val unlimitedRefinement: Boolean = {
       options.unlimitedRefinement.getOrElse(false)
     }
     val exhaustiveCaseChecking: Boolean =
-      options.exhaustiveCaseChecking.getOrElse(
-        sys.env.get("EQWALIZER_EXHAUSTIVE_CASE_CHECKING").flatMap(_.toBooleanOption).getOrElse(false)
-      )
+      options.exhaustiveCaseChecking.getOrElse(false)
     val typeInfo: TypeInfo =
       new TypeInfo(this)
     val diagnosticsInfo: DiagnosticsInfo =
