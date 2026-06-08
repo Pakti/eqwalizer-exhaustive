@@ -230,8 +230,6 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         Some(instantiatedResultType(util.getFunType(id)))
       case DynCall(fun, args) =>
         selectorType(fun, env).flatMap(funResultType(_, args.size))
-      case BoundedDynamicType(bound) =>
-        Some(bound)
       case _ =>
         None
     }
