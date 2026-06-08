@@ -108,8 +108,8 @@ class TypeMismatch(pipelineContext: PipelineContext) {
         val exp = s"${prefix}Context expects type: ${showLimitChars(t2, chars = 60)}"
         List(got, exp).mkString("\n")
       case (ParametersMismatch, ft1: FunType, ft2: FunType) =>
-        val cnt1 = ft1.forall
-        val cnt2 = ft2.forall
+        val cnt1 = ft1.forall.size
+        val cnt2 = ft2.forall.size
         def plural(n: Int): String = if (n != 1) "s" else ""
         val got =
           s"${prefix}Here the type is:     ${showLimitChars(ft1, chars = 40)} with $cnt1 type parameter${plural(cnt1)}"
