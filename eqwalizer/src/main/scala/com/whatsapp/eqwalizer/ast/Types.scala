@@ -18,7 +18,11 @@ object Types {
   sealed trait Type
   case class AtomLitType(atom: String) extends Type
   case object AnyFunType extends Type
-  case class FunType(forall: Int, argTys: List[Type], resTy: Type) extends Type
+  case class FunType(forall: List[Int], argTys: List[Type], resTy: Type) extends Type
+  object FunType {
+    def apply(forall: Int, argTys: List[Type], resTy: Type): FunType =
+      new FunType((1 to forall).toList, argTys, resTy)
+  }
   case class AnyArityFunType(resTy: Type) extends Type
 
   case object AnyTupleType extends Type
@@ -44,6 +48,7 @@ object Types {
 
   case class RemoteType(id: RemoteId, argTys: List[Type]) extends Type
 
+  case class VarType(n: Int)(val name: String) extends Type
   case class BoundVarType(lvl: Int)(val name: String) extends Type
   case class FreeVarType(n: Int)(val name: String) extends Type
   case class RecordType(name: String)(val module: String) extends Type
