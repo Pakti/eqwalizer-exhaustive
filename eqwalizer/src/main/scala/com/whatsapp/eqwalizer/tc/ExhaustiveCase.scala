@@ -11,6 +11,7 @@ import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.*
 import com.whatsapp.eqwalizer.ast.Pats.*
 import com.whatsapp.eqwalizer.ast.Show.show
+import com.whatsapp.eqwalizer.ast.Specifier.*
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.{Id, Pos}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.NonExhaustiveCase
@@ -30,6 +31,18 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     override val erroneousExpr: Option[Expr] = None
   }
 
+  private case class NonExhaustiveFunctionText(pos: Pos, id: String, uncovered: String) extends Diagnostic {
+    override val msg: String = s"Function $id does not handle: $uncovered"
+    override val errorName: String = "non_exhaustive_function"
+    override val erroneousExpr: Option[Expr] = None
+  }
+
+  private case class NonExhaustiveCaseText(pos: Pos, uncovered: String) extends Diagnostic {
+    override val msg: String = s"Case expression does not handle: $uncovered"
+    override val errorName: String = "non_exhaustive_case"
+    override val erroneousExpr: Option[Expr] = None
+  }
+
   private case class SkippedExhaustivenessCheck(pos: Pos, subject: String, reason: String) extends Diagnostic {
     override val msg: String = s"Skipped exhaustiveness check for $subject: $reason"
     override val errorName: String = "skipped_exhaustiveness_check"
@@ -37,8 +50,13 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   }
 
   private sealed trait CoverageResult
-  private case class Covered(uncovered: List[Type]) extends CoverageResult
+  private case class Covered(uncovered: List[Type], uncoveredText: Option[String] = None) extends CoverageResult
   private case class Unsupported(reason: String) extends CoverageResult
+
+  private sealed trait BinaryPart { def rendered: String }
+  private case object EmptyBinary extends BinaryPart { val rendered = "<<>>" }
+  private case object NonEmptyBinary extends BinaryPart { val rendered = "<<_, _/binary>>" }
+  private val allBinaryParts: Set[BinaryPart] = Set(EmptyBinary, NonEmptyBinary)
 
   private val simpleUnaryPredicates: Map[String, Type] =
     Map(
@@ -75,7 +93,9 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       clause => clause.pats.headOption,
       selectorAliases(c.expr),
     ) match {
-      case Covered(uncovered) if uncovered.nonEmpty =>
+      case Covered(_, Some(uncovered)) =>
+        diagnosticsInfo.add(NonExhaustiveCaseText(c.pos, uncovered))
+      case Covered(uncovered, None) if uncovered.nonEmpty =>
         diagnosticsInfo.add(NonExhaustiveCase(c.pos, toType(uncovered)))
       case Unsupported(reason) =>
         diagnosticsInfo.add(SkippedExhaustivenessCheck(c.pos, "case expression", reason))
@@ -85,7 +105,9 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def checkFunctionClauses(f: FunDecl, argTys: List[Type]): Unit =
     functionCoverage(f, argTys) match {
-      case Covered(uncovered) if uncovered.nonEmpty =>
+      case Covered(_, Some(uncovered)) =>
+        diagnosticsInfo.add(NonExhaustiveFunctionText(f.pos, f.id.toString, uncovered))
+      case Covered(uncovered, None) if uncovered.nonEmpty =>
         diagnosticsInfo.add(NonExhaustiveFunction(f.pos, f.id.toString, toType(uncovered)))
       case Unsupported(reason) =>
         diagnosticsInfo.add(SkippedExhaustivenessCheck(f.pos, s"function ${f.id}", reason))
@@ -240,36 +262,125 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   ): CoverageResult =
     if (hasUnguardedCatchAll(clauses, selectedPattern)) Covered(Nil)
     else
-      simpleAlternatives(selType).map(_.distinct) match {
+      binaryCoverageFor(selType, clauses, selectedPattern) match {
+        case Some(result) =>
+          result
         case None =>
-          Unsupported("scrutinee type is outside the supported flat-union subset")
-        case Some(alternatives) =>
-          var remaining = alternatives
-          var unsupported: Option[String] = None
-          for (clause <- clauses if unsupported.isEmpty) {
-            selectedPattern(clause) match {
-              case None =>
-                unsupported = Some("clause shape is unsupported")
-              case Some(pat) =>
-                simplePatternCover(pat) match {
+          simpleAlternatives(selType).map(_.distinct) match {
+            case None =>
+              Unsupported("scrutinee type is outside the supported flat-union subset")
+            case Some(alternatives) =>
+              var remaining = alternatives
+              var unsupported: Option[String] = None
+              for (clause <- clauses if unsupported.isEmpty) {
+                selectedPattern(clause) match {
                   case None =>
-                    unsupported = Some("pattern is outside the supported subset")
-                  case Some(PatternCover(patTy, aliases)) =>
-                    simpleGuardCover(clause.guards, aliases ++ extraAliases) match {
+                    unsupported = Some("clause shape is unsupported")
+                  case Some(pat) =>
+                    simplePatternCover(pat) match {
                       case None =>
-                        unsupported = Some("guard is outside the supported subset")
-                      case Some(guardTy) =>
-                        val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
-                        remaining = remaining.filterNot(covered.contains)
+                        unsupported = Some("pattern is outside the supported subset")
+                      case Some(PatternCover(patTy, aliases)) =>
+                        simpleGuardCover(clause.guards, aliases ++ extraAliases) match {
+                          case None =>
+                            unsupported = Some("guard is outside the supported subset")
+                          case Some(guardTy) =>
+                            val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
+                            remaining = remaining.filterNot(covered.contains)
+                        }
                     }
                 }
-            }
-          }
-          unsupported match {
-            case Some(reason) => Unsupported(reason)
-            case None         => Covered(remaining)
+              }
+              unsupported match {
+                case Some(reason) => Unsupported(reason)
+                case None         => Covered(remaining)
+              }
           }
       }
+
+  private def binaryCoverageFor(
+      selType: Type,
+      clauses: List[Clause],
+      selectedPattern: Clause => Option[Pat],
+  ): Option[CoverageResult] = {
+    val selectedPatterns = clauses.flatMap(selectedPattern)
+    if (!isBinaryScrutinee(selType) || !selectedPatterns.exists(_.isInstanceOf[PatBinary])) None
+    else {
+      var remaining = allBinaryParts
+      var unsupported: Option[String] = None
+      for (clause <- clauses if unsupported.isEmpty) {
+        if (clause.guards.nonEmpty) unsupported = Some("binary-pattern guards are outside the supported subset")
+        else {
+          selectedPattern(clause) match {
+            case None =>
+              unsupported = Some("clause shape is unsupported")
+            case Some(pat) =>
+              binaryPatternCover(pat) match {
+                case None =>
+                  unsupported = Some("binary pattern is outside the supported subset")
+                case Some(covered) =>
+                  remaining = remaining -- covered
+              }
+          }
+        }
+      }
+      unsupported match {
+        case Some(reason) =>
+          Some(Unsupported(reason))
+        case None if remaining.isEmpty =>
+          Some(Covered(Nil))
+        case None =>
+          Some(Covered(Nil, Some(remaining.toList.map(_.rendered).sorted.mkString(" | "))))
+      }
+    }
+  }
+
+  private def isBinaryScrutinee(t: Type): Boolean =
+    t match {
+      case BinaryType =>
+        true
+      case RemoteType(rid, args) =>
+        isBinaryScrutinee(util.getTypeDeclBody(rid, args))
+      case _ =>
+        false
+    }
+
+  private def binaryPatternCover(pat: Pat): Option[Set[BinaryPart]] =
+    pat match {
+      case PatBinary(Nil) =>
+        Some(Set(EmptyBinary))
+      case PatBinary(PatBinaryElem(pat, None, spec) :: Nil) if isAnyPattern(pat) && isOpenBinarySpecifier(spec) =>
+        Some(allBinaryParts)
+      case PatBinary(first :: tail :: Nil) if isAnyByteSegment(first) && isOpenBinaryTail(tail) =>
+        Some(Set(NonEmptyBinary))
+      case _ =>
+        None
+    }
+
+  private def isAnyByteSegment(elem: PatBinaryElem): Boolean =
+    isAnyPattern(elem.pat) && isByteIntegerSpecifier(elem.specifier) && isImplicitOrEightBitSize(elem.size)
+
+  private def isOpenBinaryTail(elem: PatBinaryElem): Boolean =
+    isAnyPattern(elem.pat) && elem.size.isEmpty && isOpenBinarySpecifier(elem.specifier)
+
+  private def isByteIntegerSpecifier(spec: com.whatsapp.eqwalizer.ast.Specifier): Boolean =
+    spec match {
+      case SignedIntegerSpecifier | UnsignedIntegerSpecifier => true
+      case _                                                 => false
+    }
+
+  private def isOpenBinarySpecifier(spec: com.whatsapp.eqwalizer.ast.Specifier): Boolean =
+    spec match {
+      case BinarySpecifier | BytesSpecifier => true
+      case _                                => false
+    }
+
+  private def isImplicitOrEightBitSize(size: Option[Expr]): Boolean =
+    size match {
+      case None                    => true
+      case Some(IntLit(Some(8)))   => true
+      case _                       => false
+    }
 
   private def hasUnguardedCatchAll(clauses: List[Clause], selectedPattern: Clause => Option[Pat]): Boolean =
     clauses.exists(clause => clause.guards.isEmpty && selectedPattern(clause).exists(isAnyPattern))
