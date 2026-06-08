@@ -1,14 +1,18 @@
-Below is a resume note for the work done on the eqwalizer fork, branch:
+# Project status: exhaustive case checking
+
+Branch:
 
 ```text
 feature/exhaustive-case-checking
 ```
 
+Last updated: 2026-06-08.
+
 ## Goal
 
-We added an experimental exhaustiveness checker to eqwalizer, focused on Erlang `case` expressions and function clauses. The checker is deliberately conservative: it reports missing cases when it can prove them, and emits a `skipped_exhaustiveness_check` diagnostic when the code shape is outside the supported subset.
+This branch adds an experimental exhaustiveness checker to eqwalizer. The checker covers Erlang `case` expressions and function clauses. It is deliberately conservative: it reports missing cases when it can prove them, and emits a `skipped_exhaustiveness_check` diagnostic when the code shape or type is outside the supported subset.
 
-The implementation was also backported to work with the AST JSON format emitted by ELP commit:
+The implementation was also backported to work with the AST JSON emitted by ELP commit:
 
 ```text
 WhatsApp/erlang-language-platform@3a65019
@@ -26,6 +30,18 @@ val exhaustiveCaseChecking: Boolean =
 ```
 
 So no `eqwalizer.config` entry is currently required.
+
+The checker now supports all of the following broad areas:
+
+* `case` exhaustiveness over finite flat unions;
+* function-clause exhaustiveness over finite flat unions;
+* tuple/tagged tuple patterns;
+* simple guard refinements such as `is_atom/1`, `is_binary/1`, and `is_record/2`;
+* empty/non-empty `binary()` coverage;
+* selector typing for simple calls and dynamic function calls;
+* tuple selector expressions such as `case {A, B} of ... end` in a conservative catch-all form;
+* multi-argument functions with a final catch-all clause;
+* finite product-space checking for multi-argument functions without requiring a final catch-all.
 
 ## Main files changed
 
@@ -45,11 +61,15 @@ eqwalizer/src/main/scala/com/whatsapp/eqwalizer/tc/Subtype.scala
 eqwalizer/src/main/scala/com/whatsapp/eqwalizer/tc/TypeMismatch.scala
 ```
 
-The most important implementation file is `ExhaustiveCase.scala`.
+The most important implementation file is:
+
+```text
+eqwalizer/src/main/scala/com/whatsapp/eqwalizer/tc/ExhaustiveCase.scala
+```
 
 ## AST compatibility work for ELP 3a65019
 
-The fork originally expected a newer/different AST JSON shape than ELP `3a65019` emits. We adjusted Scala-side decoding to match the older format.
+The fork originally expected a newer or different AST JSON shape than ELP `3a65019` emits. We adjusted Scala-side decoding to match the older format.
 
 ### Type variable encoding
 
@@ -61,7 +81,7 @@ We changed the Scala model from the newer `forall: Int` assumption back to:
 forall: List[Int]
 ```
 
-and fixed downstream code that had been comparing `forall` directly with integers. We added compatibility helpers where useful.
+and fixed downstream code that had been comparing `forall` directly with integers.
 
 Affected areas included:
 
@@ -108,18 +128,6 @@ We fixed this by:
 * adding `Key.fromString`;
 * supporting atom keys and tuple keys such as `{foo, bar}`.
 
-Final key codec shape:
-
-```scala
-implicit val keyCodec: JsonKeyCodec[Key] = new JsonKeyCodec[Key] {
-  override def decodeKey(in: JsonReader): Key =
-    Key.fromString(in.readKeyAsString())
-
-  override def encodeKey(x: Key, out: JsonWriter): Unit =
-    out.writeKey(x.toString)
-}
-```
-
 ### Binary specifier enum names
 
 ELP `3a65019` emits binary segment specifiers such as:
@@ -144,7 +152,7 @@ com.whatsapp.eqwalizer.ast.Specifier
 
 ### External form variants
 
-ELP `3a65019` emits more converted form variants than the Scala model was accepting. We added support for the relevant ignored/pass-through external forms, including:
+ELP `3a65019` emits more converted form variants than the Scala model was accepting. We added support for the relevant ignored or pass-through external forms, including:
 
 ```text
 CompileExportAll
@@ -176,7 +184,7 @@ We changed `ELPDiagnostics.scala` so new exhaustiveness diagnostics are sent as 
 
 In practice:
 
-* `message`, `range`, `uri`, `code`, `explanation`, `expression` remain;
+* `message`, `range`, `uri`, `code`, `explanation`, and `expression` remain;
 * `diagnostic` is omitted for unsupported new exhaustiveness diagnostics.
 
 This fixed errors where ELP printed raw escaped JSON like:
@@ -185,13 +193,9 @@ This fixed errors where ELP printed raw escaped JSON like:
 parsing for eqwalizer: "{\"Done\": ... }"
 ```
 
-## Initial exhaustiveness checker
+## Checker architecture
 
-The checker lives in:
-
-```text
-ExhaustiveCase.scala
-```
+The checker lives in `ExhaustiveCase.scala`.
 
 It is invoked from the normal pipeline after ordinary function checking:
 
@@ -203,18 +207,16 @@ ctx.diagnosticsInfo.popErrors()
 
 So the checker trusts the function spec even if the body has type errors. It does not require ordinary typechecking to succeed.
 
-### Main design
+At a high level, the checker works by:
 
-The checker works by:
+1. obtaining a scrutinee or argument type;
+2. expanding it into a small finite set of alternatives when possible;
+3. processing clauses in order;
+4. subtracting alternatives covered by supported patterns and supported guards;
+5. reporting remaining alternatives as non-exhaustive;
+6. emitting `skipped_exhaustiveness_check` if the shape is unsupported.
 
-1. Getting a scrutinee type.
-2. Expanding it into a small finite set of alternatives.
-3. Processing clauses in order.
-4. Subtracting the alternatives covered by each supported pattern and guard.
-5. Reporting remaining alternatives as non-exhaustive.
-6. Emitting `skipped_exhaustiveness_check` if the shape is unsupported.
-
-It is intentionally conservative. Unsupported code should not produce false missing-case diagnostics; it should produce a skipped-check diagnostic.
+Unsupported code should not produce false missing-case diagnostics; it should produce a skipped-check diagnostic.
 
 ## Case expression support
 
@@ -230,16 +232,19 @@ where `X` was a variable from the function arguments.
 
 Now it also tries to type simple selector expressions from specs.
 
-Supported selector forms now include:
+Supported selector forms include:
 
 ```text
 Var(V)
+Tuple(Elems), when all element types are known
 LocalCall(F, Args)
 RemoteCall(M:F, Args)
 DynCall(FunExpr, Args), when FunExpr has a known FunType
 ```
 
-Examples now handled better:
+### Spec-based selector calls
+
+This now handles selectors such as:
 
 ```erlang
 case IsExpectedType(X) of
@@ -248,13 +253,13 @@ case IsExpectedType(X) of
 end
 ```
 
-where `IsExpectedType` comes from a spec like:
+where `IsExpectedType` has a type such as:
 
 ```erlang
 fun((any()) -> boolean())
 ```
 
-and:
+It also handles local or remote function calls when the function spec has a useful return type, for example:
 
 ```erlang
 case get_option(Key, Map, fun is_binary/1) of
@@ -264,9 +269,7 @@ case get_option(Key, Map, fun is_binary/1) of
 end
 ```
 
-where `get_option/3` has a spec.
-
-Important limitation: selector typing currently trusts the declared result type. It does not specialize a polymorphic or callback-driven function result based on the actual arguments. For example, if `get_value/3` is specced as returning `any()`, then:
+Important limitation: selector typing currently trusts the declared result type. It does not specialize a polymorphic or callback-driven function result based on the actual arguments. If `get_value/3` is specced as returning `any()`, then:
 
 ```erlang
 case get_value(Key, Map, fun is_binary/1) of
@@ -274,25 +277,60 @@ case get_value(Key, Map, fun is_binary/1) of
 end
 ```
 
-still sees the selector as `any()`, not `binary()`.
+still sees the selector as `any()`, not `binary()`. That will usually skip because `any()` is outside the supported finite subset.
+
+### Tuple selector expressions
+
+The checker now supports tuple selector expressions when every tuple element has a known type:
+
+```erlang
+-type t(T) :: none | {some, T}.
+
+-spec apply3(t(fun((A) -> B)), t(A)) -> t(B).
+apply3(FnOption, ValueOption) ->
+    case {FnOption, ValueOption} of
+        {{some, Fun}, {some, Value}} ->
+            {some, Fun(Value)};
+        _ ->
+            none
+    end.
+```
+
+This is accepted through a conservative fast path:
+
+* the selector must be a tuple expression;
+* the final clause must be an unguarded catch-all;
+* every non-final clause must have exactly one tuple pattern;
+* the tuple pattern arity must match the selector tuple arity;
+* non-final tuple patterns must stay inside the existing simple-pattern subset.
+
+This feature is intentionally separate from full product-space reasoning for `case`; it accepts the common idiom where a final catch-all handles the remaining combinations.
 
 ## Function-clause exhaustiveness
 
-We extended the checker from `case` expressions to function clauses.
+The checker supports function-clause exhaustiveness using several increasingly general paths.
 
-It supports:
+### Single-argument finite unions
+
+The basic supported form is:
 
 ```erlang
--type t() :: a | b | c.
+-type abc() :: a | b | c.
 
--spec f(t()) -> ok.
+-spec f(abc()) -> ok.
 f(a) -> ok;
 f(b) -> ok.
 ```
 
-and reports that `c` is missing.
+Expected diagnostic:
 
-It also supports a conservative multi-argument mode: exactly one argument position may be interesting, while all other arguments must be variables or wildcards in every clause.
+```text
+Function f/1 does not handle: 'c'
+```
+
+### Single-interesting-argument multi-argument functions
+
+The checker still supports a conservative multi-argument mode where exactly one argument position is interesting and all other argument positions are variables or wildcards in every clause.
 
 Supported:
 
@@ -308,17 +346,90 @@ Expected missing case:
 c
 ```
 
-Unsupported and skipped:
+### Multi-argument final catch-all fast path
+
+The checker accepts multi-argument functions where the final clause is an unguarded catch-all across all arguments:
 
 ```erlang
--spec g(a | b, x | y) -> ok.
-g(a, x) -> ok;
-g(b, y) -> ok.
+-type t(T) :: none | {some, T}.
+
+-spec apply3(t(fun((A) -> B)), t(A)) -> t(B).
+apply3({some, Fun}, {some, Value}) ->
+    {some, Fun(Value)};
+apply3(_, _) ->
+    none.
 ```
 
-Reason: this requires product-space exhaustiveness, which we did not implement.
+This path does not enumerate the product space. It is a conservative proof that the final clause covers every remaining combination.
 
-### Catch-all handling
+The fast path requires:
+
+* arity greater than 1;
+* all clauses matching the spec arity;
+* a final unguarded catch-all clause such as `f(_, _) -> ...`;
+* non-final clauses using supported simple patterns;
+* non-final guards, if present, staying inside the existing supported guard subset.
+
+### Finite product-space exhaustiveness
+
+Finite product-space checking is now implemented for multi-argument function clauses.
+
+This handles idiomatic functional-style Erlang code without requiring a final catch-all. For example:
+
+```erlang
+-type t(E, A) :: {left, E} | {right, A}.
+
+-spec apply(t(E, fun((A) -> B)), t(E, A)) -> t(E, B).
+apply({right, Fn}, {right, Value}) ->
+    {right, Fn(Value)};
+apply({left, E}, _) ->
+    {left, E};
+apply(_, {left, E}) ->
+    {left, E}.
+```
+
+The product space is finite:
+
+```text
+({left, E}, {left, E})
+({left, E}, {right, A})
+({right, fun((A) -> B)}, {left, E})
+({right, fun((A) -> B)}, {right, A})
+```
+
+The clauses subtract those cells as follows:
+
+```text
+apply({right, Fn}, {right, Value}) -> covers ({right, _}, {right, _})
+apply({left, E}, _)                -> covers ({left, _}, _)
+apply(_, {left, E})                -> covers (_, {left, _})
+```
+
+All cells are covered, so the function is exhaustive.
+
+The product-space checker has explicit caps:
+
+```scala
+private val maxProductArity = 4
+private val maxProductCells = 128
+```
+
+If a product has too many dimensions or cells, the checker skips with a clear reason rather than exploding.
+
+Product-space checking currently supports:
+
+* finite alternatives produced by `simpleAlternatives`;
+* simple patterns covered by `simplePatternCover`;
+* clause-by-clause subtraction of covered product cells;
+* readable missing-cell diagnostics such as:
+
+  ```text
+  ({some, A}, none)
+  ```
+
+Product-space guard refinement is not implemented yet. Guarded product-space clauses are still a follow-up area.
+
+## Catch-all handling
 
 We fixed a false positive where functions like this warned:
 
@@ -364,7 +475,7 @@ binary patterns in a special narrow binary path
 
 ### Tuple patterns
 
-We added support for tuple patterns and tuple alternatives.
+Tuple patterns and tuple alternatives are supported.
 
 This handles tagged tuple unions such as:
 
@@ -376,7 +487,7 @@ is_left({left, _}) -> true;
 is_left({right, _}) -> false.
 ```
 
-The checker now understands that `{left, _}` covers the `{left, E}` alternative and `{right, _}` covers the `{right, A}` alternative.
+The checker understands that `{left, _}` covers the `{left, E}` alternative and `{right, _}` covers the `{right, A}` alternative.
 
 If the second clause is missing:
 
@@ -387,8 +498,6 @@ is_left({left, _}) -> true.
 it should report the `{right, A}` alternative as uncovered.
 
 ### Record guards
-
-We prioritized support for `is_record/2` as requested.
 
 Supported guard form:
 
@@ -449,13 +558,13 @@ guard_case(X) ->
     end.
 ```
 
-After the fix, the checker should report the real missing alternative, `binary()`.
+After the fix, the checker reports the real missing alternative, `binary()`.
 
 ## Binary-size coverage
 
 We added a deliberately narrow model for `binary()` exhaustiveness.
 
-The checker now splits `binary()` into:
+The checker splits `binary()` into:
 
 ```text
 <<>>
@@ -489,7 +598,7 @@ covers all binaries.
 
 covers non-empty binaries.
 
-So this now warns:
+So this warns:
 
 ```erlang
 -spec capitalize_word(binary()) -> binary().
@@ -519,26 +628,27 @@ Limitations: this is not a general Erlang bit syntax model. It does not yet supp
 
 ## Skipped-check diagnostics
 
-The checker now emits explicit warnings when it cannot analyze a construct, for example:
+The checker emits explicit warnings when it cannot analyze a construct, for example:
 
 ```text
 skipped_exhaustiveness_check
 ```
-
-This was intentional so code can be refactored into supported forms.
 
 Typical skipped reasons include:
 
 ```text
 selector type is not known
 scrutinee type is outside the supported flat-union subset
+product space includes an argument type outside the supported flat-union subset
+product-space arity N exceeds limit 4
+product space has N cells, above limit 128
 pattern is outside the supported subset
 guard is outside the supported subset
 function clauses are not in the supported single-interesting-argument form
 binary pattern is outside the supported subset
 ```
 
-This is useful, but it can be noisy. Some skipped checks are genuine limitations, and some indicate that the function spec is wider than the code handles.
+Some skipped checks are genuine checker limitations. Others indicate that the function spec is wider than the code handles.
 
 Example:
 
@@ -580,30 +690,11 @@ FunType(... DynamicType ...)
 
 The exhaustiveness checker usually cannot do anything useful with `dynamic()`.
 
-### Product-space exhaustiveness
-
-This is not implemented:
-
-```erlang
--spec f(a | b, x | y) -> ok.
-f(a, x) -> ok;
-f(b, y) -> ok.
-```
-
-The missing cases would be:
-
-```text
-{a, y}
-{b, x}
-```
-
-but that requires enumerating combinations across arguments. We intentionally avoided it.
-
 ### Full expression typing
 
 The checker does not call the full eqwalizer elaborator for arbitrary selector expressions. It has a small conservative `selectorType` helper.
 
-It handles common spec-based selectors, but not every expression eqwalizer can type.
+It handles common spec-based selectors, tuple selectors, and dynamic function calls, but not every expression eqwalizer can type.
 
 ### Result specialization from predicate arguments
 
@@ -628,6 +719,16 @@ get_binary(Key, Map) ->
 ```
 
 If `get_value/3` returns `any()`, the case is not exhaustive for all possible returns. Add a catch-all or give `get_value/3` a more precise spec if possible.
+
+### Product-space limits
+
+Finite product-space checking is implemented, but intentionally limited:
+
+* max arity is currently 4;
+* max product cells is currently 128;
+* each argument type must expand through `simpleAlternatives`;
+* broad types such as `any()`, `term()`, `dynamic()`, unconstrained `atom()`, and unconstrained `integer()` are not finite product dimensions;
+* guarded product-space clauses are not refined yet.
 
 ### General binary/bitstring support
 
@@ -679,6 +780,15 @@ Type simple case selector expressions from specs
 
 2da1abbdceab7c43e20287f9b7cf343344b0179c
 Remove unreachable selector type case
+
+c6987898252e948e3e41b7884ef4f39548013ebd
+Accept tuple selector cases with catch-all
+
+8c926e17692f013b4fcd36593192d4760e897d3c
+Accept multi-argument clauses with catch-all
+
+d75b834743c435ccd065bb83a9d318419a0fb52b
+Check finite product-space clauses
 ```
 
 Earlier compatibility commits included fixes for:
@@ -693,7 +803,7 @@ forall as List[Int]
 
 ## How to test quickly
 
-A simple atom union:
+### Simple atom union case expression
 
 ```erlang
 -type abc() :: a | b | c.
@@ -712,7 +822,7 @@ Expected:
 Case expression does not handle: 'c'
 ```
 
-Function clauses:
+### Function clauses
 
 ```erlang
 -type abc() :: a | b | c.
@@ -728,7 +838,7 @@ Expected:
 Function f/1 does not handle: 'c'
 ```
 
-Tagged tuples:
+### Tagged tuples
 
 ```erlang
 -type t(E, A) :: {left, E} | {right, A}.
@@ -743,7 +853,7 @@ Expected missing:
 {right, ...}
 ```
 
-Binary non-empty pattern:
+### Binary non-empty pattern
 
 ```erlang
 -spec capitalize_word(binary()) -> binary().
@@ -757,7 +867,7 @@ Expected missing:
 <<>>
 ```
 
-Boolean callback result:
+### Boolean callback result
 
 ```erlang
 -spec f(fun((any()) -> boolean()), any()) -> any().
@@ -772,6 +882,55 @@ Expected missing:
 ```text
 false
 ```
+
+### Tuple selector with catch-all
+
+```erlang
+-type t(T) :: none | {some, T}.
+
+-spec apply3(t(fun((A) -> B)), t(A)) -> t(B).
+apply3(FnOption, ValueOption) ->
+    case {FnOption, ValueOption} of
+        {{some, Fun}, {some, Value}} ->
+            {some, Fun(Value)};
+        _ ->
+            none
+    end.
+```
+
+Expected: no exhaustiveness warning.
+
+### Multi-argument function with catch-all
+
+```erlang
+-type t(T) :: none | {some, T}.
+
+-spec apply3(t(fun((A) -> B)), t(A)) -> t(B).
+apply3({some, Fun}, {some, Value}) ->
+    {some, Fun(Value)};
+apply3(_, _) ->
+    none.
+```
+
+Expected: no exhaustiveness warning.
+
+### Finite product-space function without catch-all
+
+```erlang
+-type t(E, A) :: {left, E} | {right, A}.
+
+-spec apply(t(E, fun((A) -> B)), t(E, A)) -> t(E, B).
+apply({right, Fn}, {right, Value}) ->
+    {right, Fn(Value)};
+apply({left, E}, _) ->
+    {left, E};
+apply(_, {left, E}) ->
+    {left, E}.
+```
+
+Expected: no exhaustiveness warning.
+
+If the last clause is removed, the checker should report the remaining cell involving a right function and a left value.
 
 ## Suggested next steps
 
@@ -790,13 +949,16 @@ The most useful follow-ups would be:
    * atom union case expressions;
    * function-clause exhaustiveness;
    * single-interesting-argument functions;
+   * multi-argument final catch-all functions;
+   * finite product-space functions;
+   * tuple selector cases with final catch-all;
    * tuple tagged unions;
    * `is_record/2`;
    * `is_atom` / `is_integer` / `is_binary` guards;
    * binary empty/non-empty coverage;
    * selector typing from local calls and dynamic function calls.
 
-4. Consider whether to implement product-space exhaustiveness for multi-argument functions.
+4. Add product-space guard refinement for simple guards over whole-argument aliases.
 
 5. Consider custom return typing for known predicate-driven helpers, but only carefully. For example, specializing `get_value(..., fun is_binary/1)` to `binary()` is useful, but it is no longer generic spec trust. It is a custom semantic rule.
 
