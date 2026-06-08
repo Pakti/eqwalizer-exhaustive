@@ -387,11 +387,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     )
 
   private def supportedMultiArgumentClause(clause: Clause, arity: Int): Boolean =
-    if (clause.pats.size != arity) false
-    else {
-      val covers = clause.pats.map(simplePatternCover)
-      covers.forall(_.isDefined) && simpleGuardCover(clause.guards, covers.flatten.flatMap(_.aliases).toSet).isDefined
-    }
+    clause.pats.size == arity && clause.pats.forall(pat => simplePatternCover(pat).isDefined)
 
   private def tupleSelectorCatchAllCoverage(selector: Expr, clauses: List[Clause]): Option[CoverageResult] =
     selector match {
