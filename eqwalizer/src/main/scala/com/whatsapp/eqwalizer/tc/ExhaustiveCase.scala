@@ -272,21 +272,46 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     else if (f.clauses.exists(_.pats.size != argTys.size))
       Unsupported("clause arity does not match the function spec")
     else {
-      val attempts = argTys.indices.toList.flatMap { idx =>
-        if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
-          Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
-        else None
-      }
-      attempts.collectFirst { case (_, covered: Covered) => covered } match {
-        case Some(covered) =>
-          covered
+      multiArgumentCatchAllCoverage(f, argTys.size) match {
+        case Some(result) =>
+          result
         case None =>
-          attempts.collectFirst { case (idx, Unsupported(reason)) =>
-            Unsupported(s"argument ${idx + 1}: $reason")
-          }.getOrElse(Unsupported("function clauses are not in the supported single-interesting-argument form"))
+          val attempts = argTys.indices.toList.flatMap { idx =>
+            if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
+              Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
+            else None
+          }
+          attempts.collectFirst { case (_, covered: Covered) => covered } match {
+            case Some(covered) =>
+              covered
+            case None =>
+              attempts.collectFirst { case (idx, Unsupported(reason)) =>
+                Unsupported(s"argument ${idx + 1}: $reason")
+              }.getOrElse(Unsupported("function clauses are not in the supported single-interesting-argument form"))
+          }
       }
     }
   }
+
+  private def multiArgumentCatchAllCoverage(f: FunDecl, arity: Int): Option[CoverageResult] =
+    if (arity <= 1 || !finalUnguardedFunctionCatchAll(f.clauses, arity)) None
+    else {
+      val nonFinalClauses = f.clauses.dropRight(1)
+      if (nonFinalClauses.forall(supportedMultiArgumentClause(_, arity))) Some(Covered(Nil))
+      else Some(Unsupported("multi-argument function has non-final clause outside the supported pattern subset"))
+    }
+
+  private def finalUnguardedFunctionCatchAll(clauses: List[Clause], arity: Int): Boolean =
+    clauses.lastOption.exists(clause =>
+      clause.guards.isEmpty && clause.pats.size == arity && clause.pats.forall(isAnyPattern)
+    )
+
+  private def supportedMultiArgumentClause(clause: Clause, arity: Int): Boolean =
+    if (clause.pats.size != arity) false
+    else {
+      val covers = clause.pats.map(simplePatternCover)
+      covers.forall(_.isDefined) && simpleGuardCover(clause.guards, covers.flatten.flatMap(_.aliases).toSet).isDefined
+    }
 
   private def tupleSelectorCatchAllCoverage(selector: Expr, clauses: List[Clause]): Option[CoverageResult] =
     selector match {
