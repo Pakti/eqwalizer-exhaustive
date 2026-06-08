@@ -295,6 +295,11 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         Some(PatternCover(NilType, Set.empty))
       case PatInt() | PatNumber() =>
         Some(PatternCover(NumberType, Set.empty))
+      case PatTuple(elems) =>
+        val elemCovers = elems.map(simplePatternCover)
+        if (elemCovers.forall(_.isDefined))
+          Some(PatternCover(TupleType(elemCovers.flatten.map(_.ty)), Set.empty))
+        else None
       case PatRecord(recName, Nil, None) =>
         Some(PatternCover(RecordType(recName)(module), Set.empty))
       case PatMatch(PatVar(alias), pat1) =>
@@ -336,6 +341,8 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       case BoundedDynamicType(_) | DynamicType | AnyType =>
         None
       case AtomLitType(_) | NilType | NumberType | BinaryType | PidType | PortType | ReferenceType | AnyFunType =>
+        Some(List(t))
+      case t: TupleType =>
         Some(List(t))
       case r: RecordType =>
         Some(List(r))
