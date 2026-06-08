@@ -85,6 +85,7 @@ object Pipeline {
 
   private def checkFun(ctx: PipelineContext, f: FunDecl, spec: FunSpec): List[Diagnostic] = {
     ctx.check.checkFun(f, spec)
+    if (ctx.exhaustiveCaseChecking) ctx.exhaustiveCase.checkFun(f, spec)
     ctx.diagnosticsInfo.popErrors()
   }
 
