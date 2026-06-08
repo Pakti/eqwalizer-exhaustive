@@ -11,7 +11,7 @@ import com.whatsapp.eqwalizer.ast.InvalidDiagnostics.Invalid
 import com.whatsapp.eqwalizer.ast.{InvalidDiagnostics, Pos, Show}
 import com.whatsapp.eqwalizer.ast.stub.Db
 import com.whatsapp.eqwalizer.io.Ipc
-import com.whatsapp.eqwalizer.tc.TcDiagnostics.{RedundantFixme, TypeError}
+import com.whatsapp.eqwalizer.tc.TcDiagnostics.{NonExhaustiveCase, RedundantFixme, TypeError}
 import com.whatsapp.eqwalizer.tc.{Options, TcDiagnostics, TypeInfo, noOptions}
 import com.github.plokhotnyuk.jsoniter_scala.core.*
 import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
@@ -25,7 +25,7 @@ object ELPDiagnostics {
       code: String,
       explanation: Option[String],
       expression: Option[String],
-      diagnostic: StructuredDiagnostic,
+      diagnostic: Option[StructuredDiagnostic],
   )
 
   enum StructuredDiagnostic {
@@ -72,6 +72,18 @@ object ELPDiagnostics {
     toELPErrors(typeErrors, invalids, redundantFixmes).sortBy(_.range.map(_.startByte))
   }
 
+  private def structuredDiagnostic(d: Diagnostic): Option[StructuredDiagnostic] =
+    d match {
+      case _: NonExhaustiveCase =>
+        None
+      case te: TcDiagnostics.TypeError =>
+        Some(StructuredDiagnostic.TypeError(te))
+      case invalid: Invalid =>
+        Some(StructuredDiagnostic.InvalidForm(invalid))
+      case _ =>
+        None
+    }
+
   private def toELPErrors(
       errors: List[Diagnostic],
       invalids: List[Invalid],
@@ -85,10 +97,7 @@ object ELPDiagnostics {
         te.errorName,
         explanation = te.explanation,
         expression = te.erroneousExpr.map(Show.show),
-        diagnostic = te match {
-          case te: TcDiagnostics.TypeError => StructuredDiagnostic.TypeError(te)
-          case invalid: Invalid            => StructuredDiagnostic.InvalidForm(invalid)
-        },
+        diagnostic = structuredDiagnostic(te),
       )
     }
 }
