@@ -1,7 +1,7 @@
 /* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
  *
  * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * the root directory of this source tree.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -340,7 +340,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         else None
       case BoundedDynamicType(_) | DynamicType | AnyType =>
         None
-      case AtomLitType(_) | NilType | NumberType | BinaryType | PidType | PortType | ReferenceType | AnyFunType =>
+      case AtomLitType(_) | AtomType | NilType | NumberType | BinaryType | PidType | PortType | ReferenceType | AnyFunType =>
         Some(List(t))
       case t: TupleType =>
         Some(List(t))
