@@ -79,6 +79,19 @@ object Exprs {
 
   case class Clause(pats: List[Pat], guards: List[Guard], body: Body)(val pos: Pos)
   case class BinaryElem(expr: Expr, size: Option[Expr], specifier: Specifier)(val pos: Pos)
+
+  sealed trait Specifier
+  case object SignedIntegerSpecifier extends Specifier
+  case object UnsignedIntegerSpecifier extends Specifier
+  case object FloatSpecifier extends Specifier
+  case object BinarySpecifier extends Specifier
+  case object BytesSpecifier extends Specifier
+  case object BitstringSpecifier extends Specifier
+  case object BitsSpecifier extends Specifier
+  case object Utf8Specifier extends Specifier
+  case object Utf16Specifier extends Specifier
+  case object Utf32Specifier extends Specifier
+
   sealed trait RecordField {
     val value: Expr
   }
