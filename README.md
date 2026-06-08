@@ -1,3 +1,5 @@
+**This fork is an attempt to add exhaustiveness-checking to eqWalizer.**
+
 # eqWAlizer
 
 A type-checker for Erlang.
