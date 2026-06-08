@@ -45,7 +45,7 @@ class ElabApplyOverloaded(pipelineContext: PipelineContext) {
   private def toFunType(depFunSpec: OverloadedFunSpec): Option[FunType] = {
     // If a sub-spec has generic vars, - transforming it to a FunType is tricky in general case.
     // Skipping overloaded specs with generic vars for now (for simplicity).
-    if (depFunSpec.tys.forall(_.forall == 0)) {
+    if (depFunSpec.tys.forall(_.forall.isEmpty)) {
       val result = depFunSpec.tys.reduce { (acc, elem) =>
         val argTys = acc.argTys.zip(elem.argTys).map { case (t1, t2) => subtype.join(t1, t2) }
         FunType(0, argTys, DynamicType)
