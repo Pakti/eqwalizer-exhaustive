@@ -120,16 +120,16 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def checkExpr(expr: Expr, env: Env): Unit =
     expr match {
-      case c @ Case(Var(v), _) if env.contains(v) =>
-        check(c, env(v))
-        c.clauses.foreach(clause => checkBody(clause.body, env))
-      case c @ Case(Var(v), clauses) =>
-        diagnosticsInfo.add(SkippedExhaustivenessCheck(c.pos, "case expression", s"selector variable $v has no known type"))
-        clauses.foreach(clause => checkBody(clause.body, env))
-      case c @ Case(_, clauses) =>
-        diagnosticsInfo.add(
-          SkippedExhaustivenessCheck(c.pos, "case expression", "selector is not a variable with a known type")
-        )
+      case c @ Case(selector, clauses) =>
+        selectorType(selector, env) match {
+          case Some(selType) =>
+            check(c, selType)
+          case None =>
+            diagnosticsInfo.add(
+              SkippedExhaustivenessCheck(c.pos, "case expression", "selector type is not known")
+            )
+        }
+        checkExpr(selector, env)
         clauses.foreach(clause => checkBody(clause.body, env))
       case Block(body) =>
         checkBody(body, env)
@@ -218,6 +218,44 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         case _              => None
       }
       Some(entries.toMap)
+    }
+
+  private def selectorType(expr: Expr, env: Env): Option[Type] =
+    expr match {
+      case Var(v) =>
+        env.get(v)
+      case LocalCall(id, _) =>
+        Some(instantiatedResultType(util.getFunType(module, id)))
+      case RemoteCall(id, _) =>
+        Some(instantiatedResultType(util.getFunType(id)))
+      case DynCall(fun, args) =>
+        selectorType(fun, env).flatMap(funResultType(_, args.size))
+      case BoundedDynamicType(bound) =>
+        Some(bound)
+      case _ =>
+        None
+    }
+
+  private def instantiatedResultType(ft: FunType): Type = {
+    val (_, instantiated) = instantiate.instantiate(ft)
+    instantiated.resTy
+  }
+
+  private def funResultType(ty: Type, arity: Int): Option[Type] =
+    ty match {
+      case ft: FunType if ft.argTys.size == arity =>
+        Some(instantiatedResultType(ft))
+      case AnyArityFunType(resTy) =>
+        Some(resTy)
+      case RemoteType(rid, args) =>
+        funResultType(util.getTypeDeclBody(rid, args), arity)
+      case BoundedDynamicType(bound) =>
+        funResultType(bound, arity)
+      case UnionType(tys) =>
+        val resultTys = tys.toList.flatMap(funResultType(_, arity))
+        if (resultTys.isEmpty) None else Some(subtype.join(resultTys))
+      case _ =>
+        None
     }
 
   private def functionCoverage(f: FunDecl, argTys: List[Type]): CoverageResult = {
@@ -377,9 +415,9 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def isImplicitOrEightBitSize(size: Option[Expr]): Boolean =
     size match {
-      case None                    => true
-      case Some(IntLit(Some(8)))   => true
-      case _                       => false
+      case None                  => true
+      case Some(IntLit(Some(8))) => true
+      case _                     => false
     }
 
   private def hasUnguardedCatchAll(clauses: List[Clause], selectedPattern: Clause => Option[Pat]): Boolean =
