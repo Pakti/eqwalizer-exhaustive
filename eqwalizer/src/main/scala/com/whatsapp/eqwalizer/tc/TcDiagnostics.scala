@@ -130,6 +130,12 @@ object TcDiagnostics {
     val errorName = "clause_not_covered"
     override val erroneousExpr: Option[Expr] = None
   }
+  case class NonExhaustiveCase(pos: Pos, uncovered: Type)(implicit val pipelineContext: PipelineContext)
+      extends TypeError {
+    override val msg: String = s"Case expression does not handle: ${show(uncovered)}"
+    val errorName = "non_exhaustive_case"
+    override val erroneousExpr: Option[Expr] = None
+  }
   case class AmbiguousLambda(pos: Pos, expr: Expr, expected: Type)(implicit
       val pipelineContext: PipelineContext
   ) extends TypeError {
