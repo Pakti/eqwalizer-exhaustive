@@ -15,6 +15,10 @@ import com.github.plokhotnyuk.jsoniter_scala.core.*
 import scala.util.boundary
 
 object Types {
+  extension (forall: List[Int]) {
+    def >(n: Int): Boolean = forall.size > n
+  }
+
   sealed trait Type
   case class AtomLitType(atom: String) extends Type
   case object AnyFunType extends Type
