@@ -78,7 +78,11 @@ object Exprs {
   case class TypeCast(expr: Expr, ty: ExtType, checked: Boolean)(val pos: Pos) extends Expr
 
   case class Clause(pats: List[Pat], guards: List[Guard], body: Body)(val pos: Pos)
-  case class BinaryElem(expr: Expr, size: Option[Expr], specifier: Specifier)(val pos: Pos)
+  case class BinaryElem(
+      expr: Expr,
+      size: Option[Expr],
+      specifier: com.whatsapp.eqwalizer.ast.Specifier,
+  )(val pos: Pos)
 
   sealed trait RecordField {
     val value: Expr
@@ -94,7 +98,7 @@ object Exprs {
   case class BGenerateStrict(pat: Pat, expr: Expr) extends Generator
   case class MGenerate(kPat: Pat, vPat: Pat, expr: Expr) extends Generator
   case class MGenerateStrict(kPat: Pat, vPat: Pat, expr: Expr) extends Generator
-  case class Zip(generators: List[Generator]) extends Generator
+  case class Zip(generators: List[Qualifier]) extends Generator
   case class Filter(expr: Expr) extends Qualifier
 
   case class ExtType(repr: Array[Byte])
