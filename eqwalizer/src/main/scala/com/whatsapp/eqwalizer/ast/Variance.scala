@@ -23,10 +23,13 @@ object Variance {
     Db.getVariance(remoteId.module, Id(remoteId.name, remoteId.arity)).get
 
   private def varianceOf(ty: Type, tv: Var, isPositivePosition: Boolean): Variance = ty match {
+    case VarType(n) if tv == n =>
+      if (isPositivePosition) Covariant
+      else Contravariant
     case FreeVarType(n) if tv == n =>
       if (isPositivePosition) Covariant
       else Contravariant
-    case FunType(forall, argTys, resTy) =>
+    case FunType(_, argTys, resTy) =>
       val variancesInArgTys = argTys.map(varianceOf(_, tv, !isPositivePosition))
       val variances = varianceOf(resTy, tv, isPositivePosition) :: variancesInArgTys
       combineVariances(variances)
@@ -46,6 +49,7 @@ object Variance {
   }
 
   private def containsVar(ty: Type, tv: Var): Boolean = ty match {
+    case VarType(n)     => tv == n
     case FreeVarType(n) => tv == n
     case _              => TypeVars.children(ty).exists(containsVar(_, tv))
   }
