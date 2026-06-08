@@ -7,6 +7,7 @@
 package com.whatsapp.eqwalizer.tc
 
 import com.whatsapp.eqwalizer.ast.Exprs.*
+import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.*
 import com.whatsapp.eqwalizer.ast.Pats.*
 import com.whatsapp.eqwalizer.ast.Types.*
@@ -17,6 +18,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
   private lazy val subtype = pipelineContext.subtype
   private lazy val util = pipelineContext.util
+  private lazy val instantiate = pipelineContext.instantiate
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private implicit val pipelineCtx: PipelineContext = pipelineContext
 
@@ -38,12 +40,120 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       "is_tuple" -> AnyTupleType,
     )
 
+  def checkFun(f: FunDecl, spec: FunSpec): Unit = {
+    val (_, ft) = instantiate.instantiate(spec.ty)
+    val FunType(_, argTys, _) = ft
+    for (clause <- f.clauses) {
+      val env = clauseEnv(clause, argTys).getOrElse(Map.empty)
+      checkBody(clause.body, env)
+    }
+  }
+
   def check(c: Case, selType: Type): Unit =
     uncovered(c, selType) match {
       case Some(uncovered) if uncovered.nonEmpty =>
         diagnosticsInfo.add(NonExhaustiveCase(c.pos, toType(uncovered)))
       case _ =>
         ()
+    }
+
+  private def checkBody(body: Body, env: Env): Unit =
+    body.exprs.foreach(checkExpr(_, env))
+
+  private def checkExpr(expr: Expr, env: Env): Unit =
+    expr match {
+      case c @ Case(Var(v), _) if env.contains(v) =>
+        check(c, env(v))
+        c.clauses.foreach(clause => checkBody(clause.body, env))
+      case Case(_, clauses) =>
+        clauses.foreach(clause => checkBody(clause.body, env))
+      case Block(body) =>
+        checkBody(body, env)
+      case Match(PatVar(v), value) =>
+        checkExpr(value, env)
+      case Match(_, value) =>
+        checkExpr(value, env)
+      case Tuple(elems) =>
+        elems.foreach(checkExpr(_, env))
+      case LocalCall(_, args) =>
+        args.foreach(checkExpr(_, env))
+      case RemoteCall(_, args) =>
+        args.foreach(checkExpr(_, env))
+      case DynCall(fun, args) =>
+        checkExpr(fun, env)
+        args.foreach(checkExpr(_, env))
+      case Lambda(clauses) =>
+        clauses.foreach(clause => checkBody(clause.body, env))
+      case UnOp(_, arg) =>
+        checkExpr(arg, env)
+      case BinOp(_, arg1, arg2) =>
+        checkExpr(arg1, env)
+        checkExpr(arg2, env)
+      case LComprehension(template, _) =>
+        checkExpr(template, env)
+      case BComprehension(template, _) =>
+        checkExpr(template, env)
+      case MComprehension(kTemplate, vTemplate, _) =>
+        checkExpr(kTemplate, env)
+        checkExpr(vTemplate, env)
+      case Binary(elems) =>
+        elems.foreach(elem => checkExpr(elem.expr, env))
+      case Catch(arg) =>
+        checkExpr(arg, env)
+      case TryCatchExpr(tryBody, catchClauses, afterBody) =>
+        checkBody(tryBody, env)
+        catchClauses.foreach(clause => checkBody(clause.body, env))
+        afterBody.foreach(checkBody(_, env))
+      case TryOfCatchExpr(tryBody, tryClauses, catchClauses, afterBody) =>
+        checkBody(tryBody, env)
+        tryClauses.foreach(clause => checkBody(clause.body, env))
+        catchClauses.foreach(clause => checkBody(clause.body, env))
+        afterBody.foreach(checkBody(_, env))
+      case Receive(clauses) =>
+        clauses.foreach(clause => checkBody(clause.body, env))
+      case ReceiveWithTimeout(clauses, timeout, timeoutBody) =>
+        clauses.foreach(clause => checkBody(clause.body, env))
+        checkExpr(timeout, env)
+        checkBody(timeoutBody, env)
+      case Maybe(body) =>
+        checkBody(body, env)
+      case MaybeElse(body, elseClauses) =>
+        checkBody(body, env)
+        elseClauses.foreach(clause => checkBody(clause.body, env))
+      case MaybeMatch(_, arg) =>
+        checkExpr(arg, env)
+      case RecordCreate(_, fields) =>
+        fields.foreach(field => checkExpr(field.value, env))
+      case RecordUpdate(value, _, fields) =>
+        checkExpr(value, env)
+        fields.foreach(field => checkExpr(field.value, env))
+      case RecordSelect(value, _, _) =>
+        checkExpr(value, env)
+      case MapCreate(kvs) =>
+        kvs.foreach { case (k, v) =>
+          checkExpr(k, env)
+          checkExpr(v, env)
+        }
+      case MapUpdate(map, kvs) =>
+        checkExpr(map, env)
+        kvs.foreach { case (k, v) =>
+          checkExpr(k, env)
+          checkExpr(v, env)
+        }
+      case TypeCast(value, _, _) =>
+        checkExpr(value, env)
+      case _ =>
+        ()
+    }
+
+  private def clauseEnv(clause: Clause, argTys: List[Type]): Option[Env] =
+    if (clause.pats.size != argTys.size) None
+    else {
+      val entries = clause.pats.lazyZip(argTys).flatMap {
+        case (PatVar(v), ty) => Some(v -> ty)
+        case _              => None
+      }
+      Some(entries.toMap)
     }
 
   private def uncovered(c: Case, selType: Type): Option[List[Type]] = {
