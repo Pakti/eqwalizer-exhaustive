@@ -49,14 +49,24 @@ class Constraints(pipelineContext: PipelineContext) {
     else if (subtype.subType(lower, upper)) Some(List(Map.empty))
     else
       (lower, upper) match {
+        case (VarType(n), _) if toSolve(n) =>
+          assert(TypeVars.freeVars(upper).intersect(toSolve).isEmpty)
+          val constraint = Constraint(NoneType, TypeVars.demote(upper, varsToElim))
+          Some(List(Map(n -> constraint)))
         case (FreeVarType(n), _) if toSolve(n) =>
           assert(TypeVars.freeVars(upper).intersect(toSolve).isEmpty)
           val constraint = Constraint(NoneType, TypeVars.demote(upper, varsToElim))
+          Some(List(Map(n -> constraint)))
+        case (_, VarType(n)) if toSolve(n) =>
+          assert(TypeVars.freeVars(lower).intersect(toSolve).isEmpty)
+          val constraint = Constraint(TypeVars.promote(lower, varsToElim), AnyType)
           Some(List(Map(n -> constraint)))
         case (_, FreeVarType(n)) if toSolve(n) =>
           assert(TypeVars.freeVars(lower).intersect(toSolve).isEmpty)
           val constraint = Constraint(TypeVars.promote(lower, varsToElim), AnyType)
           Some(List(Map(n -> constraint)))
+        case (VarType(n1), VarType(n2)) if n1 == n2 && !toSolve(n1) =>
+          Some(List(Map.empty))
         case (FreeVarType(n1), FreeVarType(n2)) if n1 == n2 && !toSolve(n1) =>
           Some(List(Map.empty))
         case (DynamicType, _) =>
@@ -80,7 +90,7 @@ class Constraints(pipelineContext: PipelineContext) {
             case None =>
               None
           }
-        case (ft1: AnyArityFunType, ft2: FunType) if ft2.forall == 0 =>
+        case (ft1: AnyArityFunType, ft2: FunType) if ft2.forall.isEmpty =>
           constrain(ctx, ft1.resTy, ft2.resTy, seen)
         case (ft1: FunType, ft2: AnyArityFunType) =>
           val (vars, ft11) = instantiate.instantiate(ft1)
