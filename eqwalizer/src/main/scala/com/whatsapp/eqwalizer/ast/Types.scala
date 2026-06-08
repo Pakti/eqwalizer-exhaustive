@@ -179,9 +179,13 @@ object Types {
       "nonempty_string" -> stringType,
     ) ++ builtinTypeAliases
 
+  implicit val keyCodec: JsonKeyCodec[Key] = new JsonKeyCodec[Key] {
+    override def decodeKey(in: String): Key = Key.fromString(in)
+    override def encodeKey(x: Key): String = x.toString
+  }
+
   implicit val codec: JsonValueCodec[Type] = JsonCodecMaker.make(
     CodecMakerConfig
-      .withMapAsArray(true)
       .withMapMaxInsertNumber(65536)
       .withSetMaxInsertNumber(65536)
       .withAllowRecursiveTypes(true)
@@ -190,6 +194,33 @@ object Types {
   )
 
   object Key {
+    def fromString(s: String): Key = {
+      def splitTuple(body: String): List[String] = {
+        if (body.isEmpty) Nil
+        else {
+          var depth = 0
+          var start = 0
+          var parts = List.empty[String]
+          for ((ch, i) <- body.zipWithIndex) {
+            ch match {
+              case '{' => depth += 1
+              case '}' => depth -= 1
+              case ',' if depth == 0 =>
+                parts = parts :+ body.substring(start, i).trim
+                start = i + 1
+              case _ =>
+            }
+          }
+          parts :+ body.substring(start).trim
+        }
+      }
+
+      val trimmed = s.trim
+      if (trimmed.startsWith("{") && trimmed.endsWith("}"))
+        TupleKey(splitTuple(trimmed.substring(1, trimmed.length - 1)).map(fromString))
+      else AtomKey(trimmed)
+    }
+
     def asType(k: Key): Type = {
       k match {
         case TupleKey(keys) => TupleType(keys.map(asType))
