@@ -180,8 +180,8 @@ object Types {
     ) ++ builtinTypeAliases
 
   implicit val keyCodec: JsonKeyCodec[Key] = new JsonKeyCodec[Key] {
-    override def decodeKey(in: String): Key = Key.fromString(in)
-    override def encodeKey(x: Key): String = x.toString
+    override def decodeKey(in: JsonReader): Key = Key.fromString(in.readKeyAsString())
+    override def encodeKey(x: Key, out: JsonWriter): Unit = out.writeKey(x.toString)
   }
 
   implicit val codec: JsonValueCodec[Type] = JsonCodecMaker.make(
