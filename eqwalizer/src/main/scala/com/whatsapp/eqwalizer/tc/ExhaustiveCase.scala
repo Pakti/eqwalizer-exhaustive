@@ -203,18 +203,18 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     else if (f.clauses.exists(_.pats.size != argTys.size))
       Unsupported("clause arity does not match the function spec")
     else {
-      val candidates = argTys.indices.toList.flatMap { idx =>
-        if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx)) {
-          coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty) match {
-            case covered: Covered => Some(idx -> covered)
-            case _                => None
-          }
-        } else None
+      val attempts = argTys.indices.toList.flatMap { idx =>
+        if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
+          Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
+        else None
       }
-      candidates match {
-        case (_, covered) :: _ => covered
-        case Nil =>
-          Unsupported("function clauses are not in the supported single-interesting-argument form")
+      attempts.collectFirst { case (_, covered: Covered) => covered } match {
+        case Some(covered) =>
+          covered
+        case None =>
+          attempts.collectFirst { case (idx, Unsupported(reason)) =>
+            Unsupported(s"argument ${idx + 1}: $reason")
+          }.getOrElse(Unsupported("function clauses are not in the supported single-interesting-argument form"))
       }
     }
   }
@@ -238,36 +238,41 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       selectedPattern: Clause => Option[Pat],
       extraAliases: Set[String],
   ): CoverageResult =
-    simpleAlternatives(selType).map(_.distinct) match {
-      case None =>
-        Unsupported("scrutinee type is outside the supported flat-union subset")
-      case Some(alternatives) =>
-        var remaining = alternatives
-        var unsupported: Option[String] = None
-        for (clause <- clauses if unsupported.isEmpty) {
-          selectedPattern(clause) match {
-            case None =>
-              unsupported = Some("clause shape is unsupported")
-            case Some(pat) =>
-              simplePatternCover(pat) match {
-                case None =>
-                  unsupported = Some("pattern is outside the supported subset")
-                case Some(PatternCover(patTy, aliases)) =>
-                  simpleGuardCover(clause.guards, aliases ++ extraAliases) match {
-                    case None =>
-                      unsupported = Some("guard is outside the supported subset")
-                    case Some(guardTy) =>
-                      val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
-                      remaining = remaining.filterNot(covered.contains)
-                  }
-              }
+    if (hasUnguardedCatchAll(clauses, selectedPattern)) Covered(Nil)
+    else
+      simpleAlternatives(selType).map(_.distinct) match {
+        case None =>
+          Unsupported("scrutinee type is outside the supported flat-union subset")
+        case Some(alternatives) =>
+          var remaining = alternatives
+          var unsupported: Option[String] = None
+          for (clause <- clauses if unsupported.isEmpty) {
+            selectedPattern(clause) match {
+              case None =>
+                unsupported = Some("clause shape is unsupported")
+              case Some(pat) =>
+                simplePatternCover(pat) match {
+                  case None =>
+                    unsupported = Some("pattern is outside the supported subset")
+                  case Some(PatternCover(patTy, aliases)) =>
+                    simpleGuardCover(clause.guards, aliases ++ extraAliases) match {
+                      case None =>
+                        unsupported = Some("guard is outside the supported subset")
+                      case Some(guardTy) =>
+                        val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
+                        remaining = remaining.filterNot(covered.contains)
+                    }
+                }
+            }
           }
-        }
-        unsupported match {
-          case Some(reason) => Unsupported(reason)
-          case None         => Covered(remaining)
-        }
-    }
+          unsupported match {
+            case Some(reason) => Unsupported(reason)
+            case None         => Covered(remaining)
+          }
+      }
+
+  private def hasUnguardedCatchAll(clauses: List[Clause], selectedPattern: Clause => Option[Pat]): Boolean =
+    clauses.exists(clause => clause.guards.isEmpty && selectedPattern(clause).exists(isAnyPattern))
 
   private def selectorAliases(expr: Expr): Set[String] =
     expr match {
