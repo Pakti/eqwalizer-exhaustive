@@ -123,7 +123,14 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       case c @ Case(selector, clauses) =>
         selectorType(selector, env) match {
           case Some(selType) =>
-            check(c, selType)
+            tupleSelectorCatchAllCoverage(selector, clauses) match {
+              case Some(Covered(_, _)) =>
+                ()
+              case Some(Unsupported(reason)) =>
+                diagnosticsInfo.add(SkippedExhaustivenessCheck(c.pos, "case expression", reason))
+              case None =>
+                check(c, selType)
+            }
           case None =>
             diagnosticsInfo.add(
               SkippedExhaustivenessCheck(c.pos, "case expression", "selector type is not known")
@@ -224,6 +231,10 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     expr match {
       case Var(v) =>
         env.get(v)
+      case Tuple(elems) =>
+        val elemTys = elems.map(selectorType(_, env))
+        if (elemTys.forall(_.isDefined)) Some(TupleType(elemTys.flatten))
+        else None
       case LocalCall(id, _) =>
         Some(instantiatedResultType(util.getFunType(module, id)))
       case RemoteCall(id, _) =>
@@ -276,6 +287,31 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       }
     }
   }
+
+  private def tupleSelectorCatchAllCoverage(selector: Expr, clauses: List[Clause]): Option[CoverageResult] =
+    selector match {
+      case Tuple(elems) if finalUnguardedCatchAll(clauses, clause => clause.pats.headOption) =>
+        val arity = elems.size
+        val nonFinalClauses = clauses.dropRight(1)
+        if (nonFinalClauses.forall(supportedTupleSelectorClause(_, arity))) Some(Covered(Nil))
+        else Some(Unsupported("tuple selector case has non-final pattern outside the supported tuple-pattern subset"))
+      case _ =>
+        None
+    }
+
+  private def supportedTupleSelectorClause(clause: Clause, arity: Int): Boolean =
+    clause.pats match {
+      case pat :: Nil => supportedTupleSelectorPattern(pat, arity)
+      case _          => false
+    }
+
+  private def supportedTupleSelectorPattern(pat: Pat, arity: Int): Boolean =
+    pat match {
+      case PatTuple(elems) if elems.size == arity =>
+        simplePatternCover(pat).isDefined
+      case _ =>
+        false
+    }
 
   private def otherArgumentsAreVariablesOrWildcards(clauses: List[Clause], selectedIndex: Int): Boolean =
     clauses.forall { clause =>
@@ -420,6 +456,9 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def hasUnguardedCatchAll(clauses: List[Clause], selectedPattern: Clause => Option[Pat]): Boolean =
     clauses.exists(clause => clause.guards.isEmpty && selectedPattern(clause).exists(isAnyPattern))
+
+  private def finalUnguardedCatchAll(clauses: List[Clause], selectedPattern: Clause => Option[Pat]): Boolean =
+    clauses.lastOption.exists(clause => clause.guards.isEmpty && selectedPattern(clause).exists(isAnyPattern))
 
   private def selectorAliases(expr: Expr): Set[String] =
     expr match {
