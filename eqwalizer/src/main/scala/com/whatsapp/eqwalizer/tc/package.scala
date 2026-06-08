@@ -1,7 +1,7 @@
 /* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
  *
  * This source code is licensed under the Apache 2.0 license found in
- * the root directory of this source tree.
+ * the LICENSE file in the root directory of this source tree.
  */
 
 package com.whatsapp.eqwalizer
@@ -52,7 +52,7 @@ package object tc {
       options.unlimitedRefinement.getOrElse(false)
     }
     val exhaustiveCaseChecking: Boolean =
-      options.exhaustiveCaseChecking.getOrElse(false)
+      options.exhaustiveCaseChecking.getOrElse(true)
     val typeInfo: TypeInfo =
       new TypeInfo(this)
     val diagnosticsInfo: DiagnosticsInfo =
