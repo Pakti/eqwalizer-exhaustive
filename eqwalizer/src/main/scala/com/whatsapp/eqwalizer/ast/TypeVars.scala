@@ -71,7 +71,7 @@ object TypeVars {
     case vt: FreeVarType =>
       subst.get(vt.n).map(n => FreeVarType(n)(vt.name)).getOrElse(vt)
     case bv: BoundVarType =>
-      FreeVarType(bv.lvl + shift)(bv.name)
+      subst.get(bv.lvl).map(n => VarType(n)(bv.name)).getOrElse(bv)
     case FunType(forall, args, resType) =>
       FunType(forall, args.map(substVars(subst)), substVars(subst)(resType))
     case AnyArityFunType(resType) =>
