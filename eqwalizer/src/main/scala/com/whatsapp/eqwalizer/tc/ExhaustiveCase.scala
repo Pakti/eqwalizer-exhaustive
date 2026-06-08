@@ -1,7 +1,7 @@
 /* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
  *
  * This source code is licensed under the Apache 2.0 license found in
- * the root directory of this source tree.
+ * the LICENSE file in the root directory of this source tree.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -10,9 +10,11 @@ import com.whatsapp.eqwalizer.ast.Exprs.*
 import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.*
 import com.whatsapp.eqwalizer.ast.Pats.*
+import com.whatsapp.eqwalizer.ast.Show.show
 import com.whatsapp.eqwalizer.ast.Types.*
-import com.whatsapp.eqwalizer.ast.Id
+import com.whatsapp.eqwalizer.ast.{Id, Pos}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.NonExhaustiveCase
+import com.whatsapp.eqwalizer.util.Diagnostic.Diagnostic
 
 final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
@@ -21,6 +23,22 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private lazy val instantiate = pipelineContext.instantiate
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private implicit val pipelineCtx: PipelineContext = pipelineContext
+
+  private case class NonExhaustiveFunction(pos: Pos, id: String, uncovered: Type) extends Diagnostic {
+    override val msg: String = s"Function $id does not handle: ${show(uncovered)}"
+    override val errorName: String = "non_exhaustive_function"
+    override val erroneousExpr: Option[Expr] = None
+  }
+
+  private case class SkippedExhaustivenessCheck(pos: Pos, subject: String, reason: String) extends Diagnostic {
+    override val msg: String = s"Skipped exhaustiveness check for $subject: $reason"
+    override val errorName: String = "skipped_exhaustiveness_check"
+    override val erroneousExpr: Option[Expr] = None
+  }
+
+  private sealed trait CoverageResult
+  private case class Covered(uncovered: List[Type]) extends CoverageResult
+  private case class Unsupported(reason: String) extends CoverageResult
 
   private val simpleUnaryPredicates: Map[String, Type] =
     Map(
@@ -43,6 +61,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   def checkFun(f: FunDecl, spec: FunSpec): Unit = {
     val (_, ft) = instantiate.instantiate(spec.ty)
     val FunType(_, argTys, _) = ft
+    checkFunctionClauses(f, argTys)
     for (clause <- f.clauses) {
       val env = clauseEnv(clause, argTys).getOrElse(Map.empty)
       checkBody(clause.body, env)
@@ -50,9 +69,26 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   }
 
   def check(c: Case, selType: Type): Unit =
-    uncovered(c, selType) match {
-      case Some(uncovered) if uncovered.nonEmpty =>
+    coverageFor(
+      selType,
+      c.clauses,
+      clause => clause.pats.headOption,
+      selectorAliases(c.expr),
+    ) match {
+      case Covered(uncovered) if uncovered.nonEmpty =>
         diagnosticsInfo.add(NonExhaustiveCase(c.pos, toType(uncovered)))
+      case Unsupported(reason) =>
+        diagnosticsInfo.add(SkippedExhaustivenessCheck(c.pos, "case expression", reason))
+      case _ =>
+        ()
+    }
+
+  private def checkFunctionClauses(f: FunDecl, argTys: List[Type]): Unit =
+    functionCoverage(f, argTys) match {
+      case Covered(uncovered) if uncovered.nonEmpty =>
+        diagnosticsInfo.add(NonExhaustiveFunction(f.pos, f.id.toString, toType(uncovered)))
+      case Unsupported(reason) =>
+        diagnosticsInfo.add(SkippedExhaustivenessCheck(f.pos, s"function ${f.id}", reason))
       case _ =>
         ()
     }
@@ -65,7 +101,13 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       case c @ Case(Var(v), _) if env.contains(v) =>
         check(c, env(v))
         c.clauses.foreach(clause => checkBody(clause.body, env))
-      case Case(_, clauses) =>
+      case c @ Case(Var(v), clauses) =>
+        diagnosticsInfo.add(SkippedExhaustivenessCheck(c.pos, "case expression", s"selector variable $v has no known type"))
+        clauses.foreach(clause => checkBody(clause.body, env))
+      case c @ Case(_, clauses) =>
+        diagnosticsInfo.add(
+          SkippedExhaustivenessCheck(c.pos, "case expression", "selector is not a variable with a known type")
+        )
         clauses.foreach(clause => checkBody(clause.body, env))
       case Block(body) =>
         checkBody(body, env)
@@ -156,26 +198,82 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       Some(entries.toMap)
     }
 
-  private def uncovered(c: Case, selType: Type): Option[List[Type]] =
-    simpleAlternatives(selType).map(_.distinct).flatMap { alternatives =>
-      var remaining = alternatives
-      val selAlias = c.expr match {
-        case Var(n)              => Some(n)
-        case Match(PatVar(n), _) => Some(n)
-        case _                   => None
+  private def functionCoverage(f: FunDecl, argTys: List[Type]): CoverageResult = {
+    if (f.clauses.isEmpty || argTys.isEmpty) Covered(Nil)
+    else if (f.clauses.exists(_.pats.size != argTys.size))
+      Unsupported("clause arity does not match the function spec")
+    else {
+      val candidates = argTys.indices.toList.flatMap { idx =>
+        if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx)) {
+          coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty) match {
+            case covered: Covered => Some(idx -> covered)
+            case _                => None
+          }
+        } else None
       }
-      val supported = c.clauses.forall {
-        case Clause(pat :: Nil, guards, _) =>
-          simplePatternCover(pat).flatMap { case PatternCover(patTy, aliases) =>
-            simpleGuardCover(guards, aliases ++ selAlias).map { guardTy =>
-              val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
-              remaining = remaining.filterNot(covered.contains)
-            }
-          }.isDefined
-        case _ =>
-          false
+      candidates match {
+        case (_, covered) :: _ => covered
+        case Nil =>
+          Unsupported("function clauses are not in the supported single-interesting-argument form")
       }
-      if (supported) Some(remaining) else None
+    }
+  }
+
+  private def otherArgumentsAreVariablesOrWildcards(clauses: List[Clause], selectedIndex: Int): Boolean =
+    clauses.forall { clause =>
+      clause.pats.zipWithIndex.forall { case (pat, idx) =>
+        idx == selectedIndex || isAnyPattern(pat)
+      }
+    }
+
+  private def isAnyPattern(pat: Pat): Boolean =
+    pat match {
+      case PatWild() | PatVar(_) => true
+      case _                     => false
+    }
+
+  private def coverageFor(
+      selType: Type,
+      clauses: List[Clause],
+      selectedPattern: Clause => Option[Pat],
+      extraAliases: Set[String],
+  ): CoverageResult =
+    simpleAlternatives(selType).map(_.distinct) match {
+      case None =>
+        Unsupported("scrutinee type is outside the supported flat-union subset")
+      case Some(alternatives) =>
+        var remaining = alternatives
+        var unsupported: Option[String] = None
+        for (clause <- clauses if unsupported.isEmpty) {
+          selectedPattern(clause) match {
+            case None =>
+              unsupported = Some("clause shape is unsupported")
+            case Some(pat) =>
+              simplePatternCover(pat) match {
+                case None =>
+                  unsupported = Some("pattern is outside the supported subset")
+                case Some(PatternCover(patTy, aliases)) =>
+                  simpleGuardCover(clause.guards, aliases ++ extraAliases) match {
+                    case None =>
+                      unsupported = Some("guard is outside the supported subset")
+                    case Some(guardTy) =>
+                      val covered = remaining.filter(alt => subtype.subType(alt, patTy) && subtype.subType(alt, guardTy))
+                      remaining = remaining.filterNot(covered.contains)
+                  }
+              }
+          }
+        }
+        unsupported match {
+          case Some(reason) => Unsupported(reason)
+          case None         => Covered(remaining)
+        }
+    }
+
+  private def selectorAliases(expr: Expr): Set[String] =
+    expr match {
+      case Var(n)              => Set(n)
+      case Match(PatVar(n), _) => Set(n)
+      case _                   => Set.empty
     }
 
   private case class PatternCover(ty: Type, aliases: Set[String])
