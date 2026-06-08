@@ -57,6 +57,8 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private case object EmptyBinary extends BinaryPart { val rendered = "<<>>" }
   private case object NonEmptyBinary extends BinaryPart { val rendered = "<<_, _/binary>>" }
   private val allBinaryParts: Set[BinaryPart] = Set(EmptyBinary, NonEmptyBinary)
+  private val maxProductArity = 4
+  private val maxProductCells = 128
 
   private val simpleUnaryPredicates: Map[String, Type] =
     Map(
@@ -275,23 +277,101 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       multiArgumentCatchAllCoverage(f, argTys.size) match {
         case Some(result) =>
           result
+        case None if argTys.size > 1 =>
+          productSpace(argTys) match {
+            case Right(cells) =>
+              productCoverage(f, cells)
+            case Left(productReason) =>
+              singleInterestCoverage(f, argTys) match {
+                case Unsupported("function clauses are not in the supported single-interesting-argument form") =>
+                  Unsupported(productReason)
+                case other =>
+                  other
+              }
+          }
         case None =>
-          val attempts = argTys.indices.toList.flatMap { idx =>
-            if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
-              Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
-            else None
-          }
-          attempts.collectFirst { case (_, covered: Covered) => covered } match {
-            case Some(covered) =>
-              covered
-            case None =>
-              attempts.collectFirst { case (idx, Unsupported(reason)) =>
-                Unsupported(s"argument ${idx + 1}: $reason")
-              }.getOrElse(Unsupported("function clauses are not in the supported single-interesting-argument form"))
-          }
+          singleInterestCoverage(f, argTys)
       }
     }
   }
+
+  private def singleInterestCoverage(f: FunDecl, argTys: List[Type]): CoverageResult = {
+    val attempts = argTys.indices.toList.flatMap { idx =>
+      if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
+        Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
+      else None
+    }
+    attempts.collectFirst { case (_, covered: Covered) => covered } match {
+      case Some(covered) =>
+        covered
+      case None =>
+        attempts.collectFirst { case (idx, Unsupported(reason)) =>
+          Unsupported(s"argument ${idx + 1}: $reason")
+        }.getOrElse(Unsupported("function clauses are not in the supported single-interesting-argument form"))
+    }
+  }
+
+  private def productSpace(argTys: List[Type]): Either[String, List[List[Type]]] =
+    if (argTys.size > maxProductArity) Left(s"product-space arity ${argTys.size} exceeds limit $maxProductArity")
+    else {
+      val alternatives = argTys.map(simpleAlternatives)
+      if (!alternatives.forall(_.isDefined)) Left("product space includes an argument type outside the supported flat-union subset")
+      else {
+        val dimensions = alternatives.flatten
+        val cellCount = dimensions.map(_.size).product
+        if (cellCount > maxProductCells) Left(s"product space has $cellCount cells, above limit $maxProductCells")
+        else Right(cartesianProduct(dimensions))
+      }
+    }
+
+  private def cartesianProduct[T](dimensions: List[List[T]]): List[List[T]] =
+    dimensions.foldRight(List(List.empty[T])) { (dimension, acc) =>
+      for {
+        value <- dimension
+        rest <- acc
+      } yield value :: rest
+    }
+
+  private def productCoverage(f: FunDecl, cells: List[List[Type]]): CoverageResult = {
+    var remaining = cells
+    var unsupported: Option[String] = None
+    for (clause <- f.clauses if unsupported.isEmpty) {
+      productCoveredCells(clause, remaining) match {
+        case Some(covered) =>
+          remaining = remaining.filterNot(covered.contains)
+        case None =>
+          unsupported = Some("product-space clause is outside the supported pattern subset")
+      }
+    }
+    unsupported match {
+      case Some(reason) =>
+        Unsupported(reason)
+      case None if remaining.isEmpty =>
+        Covered(Nil)
+      case None =>
+        Covered(Nil, Some(remaining.map(renderProductCell).mkString(" | ")))
+    }
+  }
+
+  private def productCoveredCells(clause: Clause, cells: List[List[Type]]): Option[List[List[Type]]] = {
+    if (clause.guards.nonEmpty) None
+    else {
+      val covers = clause.pats.map(simplePatternCover)
+      if (!covers.forall(_.isDefined)) None
+      else {
+        val patternCovers = covers.flatten
+        Some(cells.filter(cell => productCellCovered(cell, patternCovers)))
+      }
+    }
+  }
+
+  private def productCellCovered(cell: List[Type], patternCovers: List[PatternCover]): Boolean =
+    cell.size == patternCovers.size && cell.lazyZip(patternCovers).forall { case (cellTy, cover) =>
+      subtype.subType(cellTy, cover.ty)
+    }
+
+  private def renderProductCell(cell: List[Type]): String =
+    cell.map(show).mkString("(", ", ", ")")
 
   private def multiArgumentCatchAllCoverage(f: FunDecl, arity: Int): Option[CoverageResult] =
     if (arity <= 1 || !finalUnguardedFunctionCatchAll(f.clauses, arity)) None
