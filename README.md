@@ -1,4 +1,4 @@
-**This fork is an attempt to add exhaustiveness-checking to eqWalizer.**
+**This fork aims to add exhaustiveness-checking to eqWalizer -- see the `feature/exhaustive-case-checking` branch.**
 
 # eqWAlizer
 
