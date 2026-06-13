@@ -1,3 +1,7 @@
+**This fork aims to add exhaustiveness-checking to eqWalizer -- see the `feature/exhaustive-case-checking` branch.**
+
+---
+
 # eqWAlizer
 
 A type-checker for Erlang.
