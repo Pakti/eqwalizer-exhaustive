@@ -9,7 +9,7 @@ package com.whatsapp.eqwalizer.tc
 import com.whatsapp.eqwalizer.ast.Guards._
 import com.whatsapp.eqwalizer.ast.Id
 import com.whatsapp.eqwalizer.ast.Types._
-import com.whatsapp.eqwalizer.tc.TcDiagnostics.{UnboundRecord, UndefinedField, UnhandledOp}
+import com.whatsapp.eqwalizer.tc.TcDiagnostics.{InvalidPrivateConstructor, PrivateConstructorViolation, UnboundRecord, UndefinedField, UnhandledOp}
 
 final class ElabGuard(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
@@ -156,6 +156,16 @@ final class ElabGuard(pipelineContext: PipelineContext) {
               diagnosticsInfo.add(UnboundRecord(test.pos, recName))
               return env
           }
+        util.privateConstructorOwnersFor(recName).toList.sorted match {
+          case Nil =>
+            ()
+          case owner :: Nil if owner != module =>
+            diagnosticsInfo.add(PrivateConstructorViolation(test.pos, recName, owner))
+          case _ :: Nil =>
+            ()
+          case owners =>
+            diagnosticsInfo.add(InvalidPrivateConstructor(test.pos, recName, s"multiple owner modules: ${owners.mkString(", ")}"))
+        }
         val namedFields = fields.collect { case f: TestRecordFieldNamed => f }
         val optGenField = fields.collectFirst { case f: TestRecordFieldGen => f }
         val genFields = recDecl.fMap.keySet -- namedFields.map(_.name)

@@ -8,10 +8,11 @@ package com.whatsapp.eqwalizer.tc
 
 import com.whatsapp.eqwalizer.ast.Exprs.*
 import com.whatsapp.eqwalizer.ast.Guards.Guard
+import com.whatsapp.eqwalizer.ast.Forms.RecDecl
 import com.whatsapp.eqwalizer.ast.Pats.{PatMatch, PatVar}
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.stub.Db
-import com.whatsapp.eqwalizer.ast.{Specifier, Filters, Pats, RemoteId, Vars}
+import com.whatsapp.eqwalizer.ast.{Specifier, Filters, Pats, Pos, RemoteId, Vars}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.*
 
 final class Elab(pipelineContext: PipelineContext) {
@@ -30,6 +31,18 @@ final class Elab(pipelineContext: PipelineContext) {
   private lazy val typeInfo = pipelineContext.typeInfo
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private implicit val pipelineCtx: PipelineContext = pipelineContext
+
+  private def checkPrivateConstructor(pos: Pos, recDecl: RecDecl): Unit =
+    util.privateConstructorOwnersFor(recDecl.name).toList.sorted match {
+      case Nil =>
+        ()
+      case owner :: Nil if owner != module =>
+        diagnosticsInfo.add(PrivateConstructorViolation(pos, recDecl.name, owner))
+      case _ :: Nil =>
+        ()
+      case owners =>
+        diagnosticsInfo.add(InvalidPrivateConstructor(pos, recDecl.name, s"multiple owner modules: ${owners.mkString(", ")}"))
+    }
 
   def elabBody(body: Body, env: Env): (Type, Env) = {
     val exprs = body.exprs
@@ -600,6 +613,7 @@ final class Elab(pipelineContext: PipelineContext) {
           diagnosticsInfo.add(UnboundRecord(rCreate.pos, recName))
           return (DynamicType, env)
       }
+    checkPrivateConstructor(rCreate.pos, recDecl)
     var refinedFields: Map[String, Type] = Map.empty
 
     var envAcc = env
@@ -662,6 +676,7 @@ final class Elab(pipelineContext: PipelineContext) {
           diagnosticsInfo.add(UnboundRecord(rUpdate.pos, recName))
           return (DynamicType, env)
       }
+    checkPrivateConstructor(rUpdate.pos, recDecl)
     var refinedFields: Map[String, Type] = Map.empty
     var envAcc = Env.empty
     if (recDecl.refinable) {
