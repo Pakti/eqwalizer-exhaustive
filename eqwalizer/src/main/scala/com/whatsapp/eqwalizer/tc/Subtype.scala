@@ -107,7 +107,7 @@ class Subtype(pipelineContext: PipelineContext) {
       case (ft1: FunType, ft2: FunType) if ft1.argTys.size == ft2.argTys.size =>
         TypeVars.conformForalls(ft1, ft2) match {
           case None =>
-            ft1.forall.nonEmpty && ft2.forall.isEmpty && {
+            ft1.forall != 0 && ft2.forall == 0 && {
               val (vars, ft) = instantiate.instantiate(ft1)
               constraints.satisfiable(
                 toSolve = vars.toSet,
