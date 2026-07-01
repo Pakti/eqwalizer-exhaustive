@@ -15,7 +15,7 @@ package object tc {
     val empty: Env = Map.empty
   }
 
-  case class Options(unlimitedRefinement: Option[Boolean] = None)
+  case class Options(unlimitedRefinement: Option[Boolean] = None, exhaustiveCaseChecking: Option[Boolean] = None)
 
   val noOptions: Options = Options()
 
@@ -44,11 +44,15 @@ package object tc {
       new ElabPat(this)
     val occurrence: Occurrence =
       new Occurrence(this)
+    val exhaustiveCase: ExhaustiveCase =
+      new ExhaustiveCase(this)
     val customReturn: CustomReturn =
       new CustomReturn(this)
     val unlimitedRefinement: Boolean = {
       options.unlimitedRefinement.getOrElse(false)
     }
+    val exhaustiveCaseChecking: Boolean =
+      options.exhaustiveCaseChecking.getOrElse(true)
     val typeInfo: TypeInfo =
       new TypeInfo(this)
     val diagnosticsInfo: DiagnosticsInfo =

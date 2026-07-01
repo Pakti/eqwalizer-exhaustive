@@ -72,7 +72,7 @@ class ElabApply(pipelineContext: PipelineContext) {
   def elabApply(ft: FunType, args: List[Expr], argTys: List[Type], env: Env, pos: Pos): Type = {
     assert(ft.argTys.size == argTys.size)
     assert(args.size == argTys.size)
-    if (ft.forall == 0)
+    if (ft.forall.isEmpty)
       elabApplyMono(ft, args, argTys, env)
     else
       elabApplyPoly(ft, args, argTys, env, pos)
@@ -108,9 +108,9 @@ class ElabApply(pipelineContext: PipelineContext) {
       .map {
         case ((lambda: Lambda, argTy: FunType), paramTy) if argTy.argTys.nonEmpty =>
           lambdaArg(lambda, argTy, paramTy)
-        case ((fun: LocalFun, argTy: FunType), paramTy) if argTy.forall > 0 && TypeVars.freeVars(paramTy).nonEmpty =>
+        case ((fun: LocalFun, argTy: FunType), paramTy) if argTy.forall.nonEmpty && TypeVars.freeVars(paramTy).nonEmpty =>
           lambdaArg(etaExpand(fun), argTy, paramTy)
-        case ((fun: RemoteFun, argTy: FunType), paramTy) if argTy.forall > 0 && TypeVars.freeVars(paramTy).nonEmpty =>
+        case ((fun: RemoteFun, argTy: FunType), paramTy) if argTy.forall.nonEmpty && TypeVars.freeVars(paramTy).nonEmpty =>
           lambdaArg(etaExpand(fun), argTy, paramTy)
         case ((expr, argTy), paramTy) => TermArg(expr, paramTy, argTy)
       }

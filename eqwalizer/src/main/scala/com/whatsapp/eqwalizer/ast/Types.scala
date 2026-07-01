@@ -15,10 +15,18 @@ import com.github.plokhotnyuk.jsoniter_scala.core.*
 import scala.util.boundary
 
 object Types {
+  extension (forall: List[Int]) {
+    def >(n: Int): Boolean = forall.size > n
+  }
+
   sealed trait Type
   case class AtomLitType(atom: String) extends Type
   case object AnyFunType extends Type
-  case class FunType(forall: Int, argTys: List[Type], resTy: Type) extends Type
+  case class FunType(forall: List[Int], argTys: List[Type], resTy: Type) extends Type
+  object FunType {
+    def apply(forall: Int, argTys: List[Type], resTy: Type): FunType =
+      new FunType((1 to forall).toList, argTys, resTy)
+  }
   case class AnyArityFunType(resTy: Type) extends Type
 
   case object AnyTupleType extends Type
@@ -44,6 +52,7 @@ object Types {
 
   case class RemoteType(id: RemoteId, argTys: List[Type]) extends Type
 
+  case class VarType(n: Int)(val name: String) extends Type
   case class BoundVarType(lvl: Int)(val name: String) extends Type
   case class FreeVarType(n: Int)(val name: String) extends Type
   case class RecordType(name: String)(val module: String) extends Type
@@ -170,9 +179,13 @@ object Types {
       "nonempty_string" -> stringType,
     ) ++ builtinTypeAliases
 
+  implicit val keyCodec: JsonKeyCodec[Key] = new JsonKeyCodec[Key] {
+    override def decodeKey(in: JsonReader): Key = Key.fromString(in.readKeyAsString())
+    override def encodeKey(x: Key, out: JsonWriter): Unit = out.writeKey(x.toString)
+  }
+
   implicit val codec: JsonValueCodec[Type] = JsonCodecMaker.make(
     CodecMakerConfig
-      .withMapAsArray(true)
       .withMapMaxInsertNumber(65536)
       .withSetMaxInsertNumber(65536)
       .withAllowRecursiveTypes(true)
@@ -181,6 +194,33 @@ object Types {
   )
 
   object Key {
+    def fromString(s: String): Key = {
+      def splitTuple(body: String): List[String] = {
+        if (body.isEmpty) Nil
+        else {
+          var depth = 0
+          var start = 0
+          var parts = List.empty[String]
+          for ((ch, i) <- body.zipWithIndex) {
+            ch match {
+              case '{' => depth += 1
+              case '}' => depth -= 1
+              case ',' if depth == 0 =>
+                parts = parts :+ body.substring(start, i).trim
+                start = i + 1
+              case _ =>
+            }
+          }
+          parts :+ body.substring(start).trim
+        }
+      }
+
+      val trimmed = s.trim
+      if (trimmed.startsWith("{") && trimmed.endsWith("}"))
+        TupleKey(splitTuple(trimmed.substring(1, trimmed.length - 1)).map(fromString))
+      else AtomKey(trimmed)
+    }
+
     def asType(k: Key): Type = {
       k match {
         case TupleKey(keys) => TupleType(keys.map(asType))

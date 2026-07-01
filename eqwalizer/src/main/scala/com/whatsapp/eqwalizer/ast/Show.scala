@@ -33,6 +33,8 @@ case class Show(pipelineContext: Option[PipelineContext]) {
       case RemoteType(rid, argTys) =>
         val prefix = showRid(rid)
         s"$prefix${argTys.map(show).mkString("(", ", ", ")")}"
+      case vt: VarType =>
+        vt.name
       case vt: BoundVarType =>
         vt.name
       case vt: FreeVarType =>
@@ -85,8 +87,8 @@ case class Show(pipelineContext: Option[PipelineContext]) {
 
   def showNotSubtype(t1: Type, t2: Type): (String, String) = (t1, t2) match {
     case (ft1: FunType, ft2: FunType) if ft1.forall != ft2.forall =>
-      val cnt1 = ft1.forall
-      val cnt2 = ft2.forall
+      val cnt1 = ft1.forall.size
+      val cnt2 = ft2.forall.size
       def plural(n: Int): String = if (n != 1) "s" else ""
       (
         s"${show(ft1)} with $cnt1 type parameter${plural(cnt1)}",
@@ -137,6 +139,8 @@ case class Show(pipelineContext: Option[PipelineContext]) {
           s"""${showRid(rid)}()"""
         else
           s"""${showRid(rid)}(.../${argTys.size})"""
+      case vt: VarType =>
+        vt.name
       case vt: BoundVarType =>
         vt.name
       case vt: FreeVarType =>
