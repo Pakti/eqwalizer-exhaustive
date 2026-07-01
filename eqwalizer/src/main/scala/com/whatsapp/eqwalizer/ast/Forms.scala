@@ -28,6 +28,7 @@ object Forms {
   case class Behaviour(name: String)(val pos: Pos) extends InternalForm
   case class EqwalizerNowarnFunction(id: Id)(val pos: Pos) extends InternalForm
   case class EqwalizerUnlimitedRefinement(id: Id)(val pos: Pos) extends InternalForm
+  case class EqwalizerPrivateConstructor(name: String, owner: Option[String] = None)(val pos: Pos) extends InternalForm
   case class TypingAttribute(names: List[String])(val pos: Pos) extends InternalForm
   case class ExternalTypeDecl(id: Id, params: List[String], body: ExtType)(val pos: Pos) extends InternalForm
   case class ExternalFunSpec(id: Id, types: List[ExtType])(val pos: Pos) extends InternalForm

@@ -63,6 +63,18 @@ object TcDiagnostics {
     def errorName = "undefined_field"
     override def erroneousExpr: Option[Expr] = None
   }
+  case class PrivateConstructorViolation(pos: Pos, recName: String, owner: String) extends TypeError {
+    override val msg: String =
+      s"Cannot construct #$recName{} outside its private constructor owner module $owner"
+    def errorName = "private_constructor_violation"
+    override def erroneousExpr: Option[Expr] = None
+  }
+  case class InvalidPrivateConstructor(pos: Pos, recName: String, reason: String) extends TypeError {
+    override val msg: String =
+      s"Invalid private constructor declaration for #$recName{}: $reason"
+    def errorName = "invalid_private_constructor"
+    override def erroneousExpr: Option[Expr] = None
+  }
   case class UnboundVar(pos: Pos, n: String) extends TypeError {
     override val msg: String = s"Unbound var: ${n}"
     def errorName = "unbound_var"
