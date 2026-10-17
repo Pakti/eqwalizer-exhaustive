@@ -23,9 +23,6 @@ object Variance {
     Db.getVariance(remoteId.module, Id(remoteId.name, remoteId.arity)).get
 
   private def varianceOf(ty: Type, tv: Var, isPositivePosition: Boolean): Variance = ty match {
-    case VarType(n) if tv == n =>
-      if (isPositivePosition) Covariant
-      else Contravariant
     case FreeVarType(n) if tv == n =>
       if (isPositivePosition) Covariant
       else Contravariant
@@ -49,7 +46,6 @@ object Variance {
   }
 
   private def containsVar(ty: Type, tv: Var): Boolean = ty match {
-    case VarType(n)     => tv == n
     case FreeVarType(n) => tv == n
     case _              => TypeVars.children(ty).exists(containsVar(_, tv))
   }

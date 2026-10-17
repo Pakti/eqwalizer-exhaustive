@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 REPO ?= .
 SBT ?= sbt
-JAR_NAME ?= eqwalizer.jar
+JAR_NAME ?= eqwalizer-strict.jar
 
 .DEFAULT_GOAL := build
 
