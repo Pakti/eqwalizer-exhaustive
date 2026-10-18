@@ -10,7 +10,7 @@ customizations, validation results, and future upgrade instructions.
 Use Java 11 or newer (validated here on Java 21), sbt 1.10.10, and the pinned Scala 3.6.4:
 
 ```sh
-make test
+make test-upstream
 make build
 make smoke
 make jar-path
@@ -18,7 +18,7 @@ make jar-path
 
 The JAR is `eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar`.
 The Scala tests and synthetic IPC checks run without ELP or Erlang.
-For readable source-based feature tests, run `make feature-test` with the pinned
+For readable source-based feature tests, run `make test` with the pinned
 ELP and matching OTP installed. OTP discovery uses your existing setup; a separate
 source tree can optionally be selected with `OTP_SOURCE=/path/to/otp-source`. The Erlang fixtures are
 [executable documentation](tests/exhaustiveness/README.md) for our custom features and

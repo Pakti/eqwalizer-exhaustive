@@ -138,7 +138,7 @@ old serialization backports alongside the new implementation.
 Validated on Linux with Java 21:
 
 ```sh
-make test        # 58 Scala tests, all passed after corrected-main reconciliation
+make test-upstream        # 58 Scala tests, all passed after corrected-main reconciliation
 make smoke       # builds JAR, then 5 synthetic process/IPC tests, all passed
 make jar-path    # eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar
 ```

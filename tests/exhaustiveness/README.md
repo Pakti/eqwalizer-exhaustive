@@ -25,7 +25,7 @@ If your matching OTP source tree is separate from the runtime installation and
 ELP's default discovery is insufficient, use an optional source-root override:
 
 ```sh
-OTP_SOURCE=/path/to/otp-source make feature-test
+OTP_SOURCE=/path/to/otp-source make test
 ```
 
 Or pass `--otp-source /path/to/otp-source` to the runner. This is the root of the
@@ -42,13 +42,13 @@ and verify the downloaded asset's published SHA-256. With the tools on PATH, run
 from the repository root:
 
 ```sh
-make feature-test
+make test
 ```
 
 This builds our JAR and runs the examples. To choose an ELP executable explicitly:
 
 ```sh
-ELP=/path/to/elp make feature-test
+ELP=/path/to/elp make test
 ```
 
 To run an existing build, customize paths, or retain generated files/logs:
@@ -140,7 +140,7 @@ The annotation/JSON adapter has its own nine Python tests, runnable without
 Java, Erlang or ELP:
 
 ```sh
-make feature-test-runner
+make test-runner
 ```
 
 The independent [feature CI workflow](../../.github/workflows/features.yml)

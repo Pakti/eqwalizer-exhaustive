@@ -28,7 +28,7 @@ jobs:
           tar -xzf elp.tar.gz
           echo "$RUNNER_TEMP/feature-elp" >> "$GITHUB_PATH"
       - name: Build the fork and test its runner
-        run: make build feature-test-runner
+        run: make build test-runner
       - name: Run literate Erlang examples
         run: python3 tests/exhaustiveness/run.py --keep-workdir
       - uses: actions/upload-artifact@v4

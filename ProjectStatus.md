@@ -299,15 +299,15 @@ comment-based contract.
 From the repository root, with Java, sbt and Python 3 available:
 
 ```sh
-make test
+make test-upstream
 make build
 make smoke
 make jar-path
-make feature-test         # uses your compatible ELP/OTP installation
-make feature-test-runner  # Python-only tests of the annotation/JSON adapter
+make test         # uses your compatible ELP/OTP installation
+make test-runner  # Python-only tests of the annotation/JSON adapter
 ```
 
-`make test` runs 58 Scala tests covering the supported exhaustiveness paths and
+`make test-upstream` runs 58 Scala tests covering the supported exhaustiveness paths and
 limits, selector calls, numeric separation, directives, private construction and
 allowed reads/patterns, pipeline activation, type/codec changes, type-declaration
 variance replies and free-variable constraints. `make smoke` assembles the JAR and
