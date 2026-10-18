@@ -26,10 +26,12 @@ assembled JAR is `eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar`. Analyzing 
 Erlang projects still requires ELP to supply ASTs, specs, types and other IPC data.
 See the [README](README.md) for the executable-wrapper setup.
 
-The last executed validation passed 58 Scala regression tests, JAR assembly, and
-five synthetic process/IPC tests. The maintainer subsequently reported that the
-upgraded checker works locally. The complete upstream ELP/Erlang test suite was
-not run in this cloud environment; synthetic IPC validation does not replace it.
+Validation includes 58 Scala regression tests, JAR assembly, five synthetic
+process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/features/README.md):
+45 source-based examples in eight modules, run through real ELP `2026-10-14` and
+OTP 27.3.4.1. Seven Python tests cover the source suite's runner. The maintainer
+also reported that the upgraded checker works locally. The complete upstream
+ELP/Erlang suite has not been run here; targeted feature tests do not replace it.
 
 ## Exhaustiveness checking
 
@@ -301,6 +303,8 @@ make test
 make build
 make smoke
 make jar-path
+make feature-test         # requires compatible ELP, OTP and OTP sources
+make feature-test-runner  # Python-only tests of the annotation/JSON adapter
 ```
 
 `make test` runs 58 Scala tests covering the supported exhaustiveness paths and
@@ -308,52 +312,36 @@ limits, selector calls, numeric separation, directives, private construction and
 allowed reads/patterns, pipeline activation, type/codec changes, type-declaration
 variance replies and free-variable constraints. `make smoke` assembles the JAR and
 runs five process tests using synthetic ELP replies, checking diagnostics,
-suppression and private-constructor enforcement. CI runs these same standalone
-Scala/IPC checks; it does not build an external ELP checkout or a native image.
+suppression and private-constructor enforcement. The original CI workflow runs
+these standalone Scala/IPC checks. The separate feature workflow additionally runs real ELP source
+checks using a pinned prebuilt release; neither builds an external ELP checkout
+or a native image.
 
-For local integration, use this fork's JAR through ELP's executable override and
-exercise real Erlang projects and the upstream ELP test fixtures. The examples
-below are useful manual checks; the Scala suite contains analogous AST-based cases.
+The fork's behavioral examples now live in executable Erlang source rather than
+being duplicated here. Each `%% @test` region contains an explanation and exact
+expected diagnostics (or `%% @expect-clean`):
 
-### Missing function and case alternatives
+| Feature | Literate source |
+| --- | --- |
+| Atom/case/function coverage, tuples, products, catch-alls and limits | [exhaustiveness.erl](tests/features/src/exhaustiveness.erl) |
+| Binary empty/nonempty coverage | [binary_coverage.erl](tests/features/src/binary_coverage.erl) |
+| Local, remote and dynamic selectors | [selector_calls.erl](tests/features/src/selector_calls.erl) |
+| Supported and unsupported guard refinements | [simple_guards.erl](tests/features/src/simple_guards.erl) |
+| Per-function suppression | [strict_directives.erl](tests/features/src/strict_directives.erl) |
+| Invalid directive diagnostics | [invalid_directives.erl](tests/features/src/invalid_directives.erl) |
+| Private constructors through shared headers | [box_owner.erl](tests/features/src/box_owner.erl), [box_client.erl](tests/features/src/box_client.erl), [private_box.hrl](tests/features/include/private_box.hrl) |
 
-```erlang
--type abc() :: a | b | c.
+The source suite is isolated under `tests/features/`, with its own Python runner
+and [CI workflow](.github/workflows/features.yml); the imported Scala sources and
+existing tests are unchanged. It uses actual ELP parsing and this fork's JAR,
+checks ordinary diagnostics as well as custom ones, and verifies a temporary
+missing-case probe in every module to reject unexecuted examples. Numeric and
+repeated-variable limitations are explicit current-behavior examples rather than
+assertions of soundness. See the [feature-suite README](tests/features/README.md)
+for Linux Mint prerequisites, ELP/OTP versions, annotation syntax and debugging.
 
--spec f(abc()) -> ok.
-f(a) -> ok;
-f(b) -> ok.
-
--spec atom_case(abc()) -> ok.
-atom_case(X) ->
-    case X of
-        a -> ok;
-        b -> ok
-    end.
-```
-
-Expected custom messages: `Function f/1 does not handle: 'c'` and
-`Case expression does not handle: 'c'`.
-
-### Unsupported guard before a final catch-all
-
-```erlang
--spec max(integer(), integer()) -> integer().
-max(X, Y) when X > Y -> X;
-max(X, Y) -> Y.
-```
-
-Expected: no custom exhaustiveness warning from the multi-argument catch-all path.
-
-### Binary empty/nonempty split
-
-```erlang
--spec capitalize_word(binary()) -> binary().
-capitalize_word(<<First, Rest/binary>>) ->
-    <<First, Rest/binary>>.
-```
-
-Expected missing binary alternative: `<<>>`.
+For broader local integration, use this fork's JAR through ELP's executable
+override and run real projects and upstream ELP fixtures as described in the README.
 
 ## Remaining work
 
@@ -364,5 +352,6 @@ Expected missing binary alternative: `<<>>`.
   exposed through ELP configuration or an environment variable.
 - Decide a default policy for skipped-check noise beyond the existing per-function
   suppression directive.
-- Expand real ELP integration coverage. Spec-driven call-result specialization and
-  support for overloaded specs remain separate feature work.
+- Extend the source-based suite as features change, and run the broader upstream
+  ELP suite separately. Spec-driven call-result specialization and support for
+  overloaded specs remain separate feature work.

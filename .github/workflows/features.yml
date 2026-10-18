@@ -1,0 +1,38 @@
+name: Fork Erlang-source features
+on:
+  push: {}
+  pull_request: {}
+permissions:
+  contents: read
+jobs:
+  features:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: sbt/setup-sbt@v1
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '27.3.4.1'
+      - name: Install the pinned ELP release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/feature-elp"
+          cd "$RUNNER_TEMP/feature-elp"
+          curl -fLsS --retry 3 https://github.com/WhatsApp/erlang-language-platform/releases/download/2026-10-14/elp-linux-x86_64-unknown-linux-gnu-otp-27.3.tar.gz -o elp.tar.gz
+          echo '797315627b37cda882c8f9c1cd6c1207700accae504e2651e3bddfa4af4d7a73  elp.tar.gz' | sha256sum -c -
+          tar -xzf elp.tar.gz
+          echo "$RUNNER_TEMP/feature-elp" >> "$GITHUB_PATH"
+      - name: Build the fork and test its runner
+        run: make build feature-test-runner
+      - name: Run literate Erlang examples
+        run: python3 tests/features/run.py --keep-workdir
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: feature-test-diagnostics
+          path: /tmp/eqwalizer-source-features-*

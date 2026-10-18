@@ -29,6 +29,14 @@ test:
 smoke: jar
 	python3 "$(REPO)/scripts/ipc-smoke.py"
 
+# Fork-owned source fixtures; requires ELP and OTP, but not rebar3.
+.PHONY: feature-test feature-test-runner
+feature-test: jar
+	python3 "$(REPO)/tests/features/run.py"
+
+feature-test-runner:
+	python3 -m unittest discover -s "$(REPO)/tests/features" -p 'test_*.py'
+
 .PHONY: status
 status:
 	cd "$(REPO)" && git status --short && echo && git diff --stat
