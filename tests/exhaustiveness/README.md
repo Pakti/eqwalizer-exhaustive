@@ -37,7 +37,7 @@ ELP=/path/to/elp make feature-test
 To run an existing build, customize paths, or retain generated files/logs:
 
 ```sh
-python3 tests/features/run.py \
+python3 tests/exhaustiveness/run.py \
   --elp /path/to/elp \
   --erl /path/to/erl \
   --escript /path/to/escript \

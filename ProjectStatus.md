@@ -27,7 +27,7 @@ Erlang projects still requires ELP to supply ASTs, specs, types and other IPC da
 See the [README](README.md) for the executable-wrapper setup.
 
 Validation includes 58 Scala regression tests, JAR assembly, five synthetic
-process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/features/README.md):
+process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/exhaustiveness/README.md):
 45 source-based examples in eight modules, run through real ELP `2026-10-14` and
 OTP 27.3.4.1. Seven Python tests cover the source suite's runner. The maintainer
 also reported that the upgraded checker works locally. The complete upstream
@@ -323,21 +323,21 @@ expected diagnostics (or `%% @expect-clean`):
 
 | Feature | Literate source |
 | --- | --- |
-| Atom/case/function coverage, tuples, products, catch-alls and limits | [exhaustiveness.erl](tests/features/src/exhaustiveness.erl) |
-| Binary empty/nonempty coverage | [binary_coverage.erl](tests/features/src/binary_coverage.erl) |
-| Local, remote and dynamic selectors | [selector_calls.erl](tests/features/src/selector_calls.erl) |
-| Supported and unsupported guard refinements | [simple_guards.erl](tests/features/src/simple_guards.erl) |
-| Per-function suppression | [strict_directives.erl](tests/features/src/strict_directives.erl) |
-| Invalid directive diagnostics | [invalid_directives.erl](tests/features/src/invalid_directives.erl) |
-| Private constructors through shared headers | [box_owner.erl](tests/features/src/box_owner.erl), [box_client.erl](tests/features/src/box_client.erl), [private_box.hrl](tests/features/include/private_box.hrl) |
+| Atom/case/function coverage, tuples, products, catch-alls and limits | [exhaustiveness.erl](tests/exhaustiveness/src/exhaustiveness.erl) |
+| Binary empty/nonempty coverage | [binary_coverage.erl](tests/exhaustiveness/src/binary_coverage.erl) |
+| Local, remote and dynamic selectors | [selector_calls.erl](tests/exhaustiveness/src/selector_calls.erl) |
+| Supported and unsupported guard refinements | [simple_guards.erl](tests/exhaustiveness/src/simple_guards.erl) |
+| Per-function suppression | [strict_directives.erl](tests/exhaustiveness/src/strict_directives.erl) |
+| Invalid directive diagnostics | [invalid_directives.erl](tests/exhaustiveness/src/invalid_directives.erl) |
+| Private constructors through shared headers | [box_owner.erl](tests/exhaustiveness/src/box_owner.erl), [box_client.erl](tests/exhaustiveness/src/box_client.erl), [private_box.hrl](tests/exhaustiveness/include/private_box.hrl) |
 
-The source suite is isolated under `tests/features/`, with its own Python runner
+The source suite is isolated under `tests/exhaustiveness/`, with its own Python runner
 and [CI workflow](.github/workflows/features.yml); the imported Scala sources and
 existing tests are unchanged. It uses actual ELP parsing and this fork's JAR,
 checks ordinary diagnostics as well as custom ones, and verifies a temporary
 missing-case probe in every module to reject unexecuted examples. Numeric and
 repeated-variable limitations are explicit current-behavior examples rather than
-assertions of soundness. See the [feature-suite README](tests/features/README.md)
+assertions of soundness. See the [feature-suite README](tests/exhaustiveness/README.md)
 for Linux Mint prerequisites, ELP/OTP versions, annotation syntax and debugging.
 
 For broader local integration, use this fork's JAR through ELP's executable

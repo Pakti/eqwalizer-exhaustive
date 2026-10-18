@@ -116,7 +116,7 @@ def compare(expected, actual):
 def executable(value, name):
     path = shutil.which(value)
     if not path:
-        raise Failure(f"Missing {name}: {value!r}. See tests/features/README.md for prerequisites.")
+        raise Failure(f"Missing {name}: {value!r}. See tests/exhaustiveness/README.md for prerequisites.")
     return str(Path(path).resolve())
 
 

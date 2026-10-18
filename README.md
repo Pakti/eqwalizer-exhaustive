@@ -20,7 +20,7 @@ The JAR is `eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar`.
 The Scala tests and synthetic IPC checks run without ELP or Erlang.
 For readable source-based feature tests, run `make feature-test` with the pinned
 ELP and matching OTP (including OTP sources) installed. The Erlang fixtures are
-[executable documentation](tests/features/README.md) for our custom features and
+[executable documentation](tests/exhaustiveness/README.md) for our custom features and
 are kept separate from the imported checker and its tests.
 
 To use the JAR with ELP, point `ELP_EQWALIZER_PATH` at an executable script containing:

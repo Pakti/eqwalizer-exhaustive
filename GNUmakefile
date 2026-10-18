@@ -32,10 +32,10 @@ smoke: jar
 # Fork-owned source fixtures; requires ELP and OTP, but not rebar3.
 .PHONY: feature-test feature-test-runner
 feature-test: jar
-	python3 "$(REPO)/tests/features/run.py"
+	python3 "$(REPO)/tests/exhaustiveness/run.py"
 
 feature-test-runner:
-	python3 -m unittest discover -s "$(REPO)/tests/features" -p 'test_*.py'
+	python3 -m unittest discover -s "$(REPO)/tests/exhaustiveness" -p 'test_*.py'
 
 .PHONY: status
 status:

@@ -30,7 +30,7 @@ jobs:
       - name: Build the fork and test its runner
         run: make build feature-test-runner
       - name: Run literate Erlang examples
-        run: python3 tests/features/run.py --keep-workdir
+        run: python3 tests/exhaustiveness/run.py --keep-workdir
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
