@@ -31,7 +31,7 @@ smoke: jar
 
 # Fork-owned source fixtures; requires ELP and OTP, but not rebar3.
 .PHONY: test test-runner
-test: jar
+test: jar test-upstream
 	python3 "$(REPO)/tests/exhaustiveness/run.py"
 
 test-runner:
