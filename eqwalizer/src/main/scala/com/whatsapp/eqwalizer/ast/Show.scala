@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -12,7 +16,7 @@ import com.whatsapp.eqwalizer.tc.PipelineContext
 
 import scala.annotation.tailrec
 
-case class Show(pipelineContext: Option[PipelineContext]) {
+case class Show(pipelineContext: PipelineContext) {
 
   def show(tp: Type): String =
     tp match {
@@ -28,13 +32,15 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         s"""[${show(elemType)}]"""
       case NilType =>
         "[]"
+      case ConsType(_, _) =>
+        showCons(tp)
       case UnionType(elemTys) =>
-        elemTys.map(show).mkString(" | ")
+        elemTys.map(show).toList.sorted.mkString(" | ")
+      case InterType(elemTys) =>
+        elemTys.map(show).toList.sorted.mkString(" & ")
       case RemoteType(rid, argTys) =>
         val prefix = showRid(rid)
         s"$prefix${argTys.map(show).mkString("(", ", ", ")")}"
-      case vt: VarType =>
-        vt.name
       case vt: BoundVarType =>
         vt.name
       case vt: FreeVarType =>
@@ -45,8 +51,10 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         "atom()"
       case NoneType =>
         "none()"
-      case NumberType =>
-        "number()"
+      case IntegerType =>
+        "integer()"
+      case FloatType =>
+        "float()"
       case PidType =>
         "pid()"
       case PortType =>
@@ -58,15 +66,16 @@ case class Show(pipelineContext: Option[PipelineContext]) {
       case RecordType(n) =>
         s"#$n{}"
       case RefinedRecordType(r, fields) =>
-        pipelineContext.flatMap(_.util.getRecord(r.module, r.name)) match {
-          case None => s"#${r.name}{}"
-          case Some(recDecl) =>
-            fields.toList
-              .filter { case (name, _) => recDecl.fMap(name).refinable }
-              .map { case (name, ty) => s"$name :: ${show(ty)}" }
-              .sorted
-              .mkString(s"#${r.name}{", ", ", "}")
-        }
+        val recDecl = pipelineContext.util.getRecord(r.module, r.name)
+        fields.toList
+          .filter { case (name, _) => recDecl.fMap(name).refinable }
+          .map { case (name, ty) => s"$name :: ${show(ty)}" }
+          .sorted
+          .mkString(s"#${r.name}{", ", ", "}")
+      case NativeRecordType(id) =>
+        s"#${id.module}:${id.name}{}"
+      case AnyNativeRecordType =>
+        "record()"
       case MapType(props, NoneType, _) =>
         props.toList.map(showMapField).sorted.mkString("#{", ", ", "}")
       case MapType(props, kt, vt) if props.isEmpty =>
@@ -87,8 +96,8 @@ case class Show(pipelineContext: Option[PipelineContext]) {
 
   def showNotSubtype(t1: Type, t2: Type): (String, String) = (t1, t2) match {
     case (ft1: FunType, ft2: FunType) if ft1.forall != ft2.forall =>
-      val cnt1 = ft1.forall.size
-      val cnt2 = ft2.forall.size
+      val cnt1 = ft1.forall
+      val cnt2 = ft2.forall
       def plural(n: Int): String = if (n != 1) "s" else ""
       (
         s"${show(ft1)} with $cnt1 type parameter${plural(cnt1)}",
@@ -107,12 +116,43 @@ case class Show(pipelineContext: Option[PipelineContext]) {
       (show(t1), show(t2))
   }
 
-  private def showMapField(field: (Key, Prop)): String = {
+  private def showMapField(field: (Key, MapProp)): String = {
     val (key, prop) = field
     if (prop.req) {
       s"$key := ${show(prop.tp)}"
     } else {
       s"$key => ${show(prop.tp)}"
+    }
+  }
+
+  /** Render a ConsType chain, flattening contiguous ConsType cells into Erlang's
+    * `[h1, h2, ... / tail]` syntax.
+    * We use `/` to disambiguate from `|` (unions).
+    * Examples:
+    *   ConsType(h, NilType)                    -> [h / []]
+    *   ConsType(h, ListType(h))                -> [h, ...]
+    *   ConsType(h1, ConsType(h2, NilType))     -> [h1, h2 / []]
+    *   ConsType(h1, ConsType(h2, ListType(t))) -> [h1, h2 / [t]]
+    *   ConsType(h, other)                      -> [h / other]
+    */
+  private def showCons(t: Type): String = {
+    val heads = scala.collection.mutable.ListBuffer.empty[Type]
+    var cur: Type = t
+    while (cur.isInstanceOf[ConsType]) {
+      val ConsType(h, tl) = cur: @unchecked
+      heads += h
+      cur = tl
+    }
+    val headStr = heads.map(show).mkString(", ")
+    cur match {
+      case NilType =>
+        s"[$headStr / []]"
+      case ListType(elemT) =>
+        // Common case: ConsType(h, ListType(e)) — non-empty list-of-e with known head.
+        if (heads.forall(h => h == elemT)) s"[${show(elemT)}, ...]"
+        else s"[$headStr / [${show(elemT)}]]"
+      case other =>
+        s"[$headStr / ${show(other)}]"
     }
   }
 
@@ -130,17 +170,23 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         "[...]"
       case NilType =>
         "[]"
+      case ConsType(_, _) =>
+        "[...]"
       case UnionType(argTys) =>
-        val argTysTruncated = argTys.toList.take(5).map(showTruncated).mkString(" | ")
-        if (argTys.size > 5) s"$argTysTruncated | ..."
+        val strTruncated = argTys.map(showTruncated).toList
+        val argTysTruncated = strTruncated.sorted.take(5).mkString(" | ")
+        if (strTruncated.size > 5) s"$argTysTruncated | ..."
+        else argTysTruncated
+      case InterType(argTys) =>
+        val strTruncated = argTys.map(showTruncated).toList
+        val argTysTruncated = strTruncated.sorted.take(5).mkString(" & ")
+        if (strTruncated.size > 5) s"$argTysTruncated & ..."
         else argTysTruncated
       case RemoteType(rid, argTys) =>
         if (argTys.isEmpty)
           s"""${showRid(rid)}()"""
         else
           s"""${showRid(rid)}(.../${argTys.size})"""
-      case vt: VarType =>
-        vt.name
       case vt: BoundVarType =>
         vt.name
       case vt: FreeVarType =>
@@ -151,8 +197,10 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         "atom()"
       case NoneType =>
         "none()"
-      case NumberType =>
-        "number()"
+      case IntegerType =>
+        "integer()"
+      case FloatType =>
+        "float()"
       case PidType =>
         "pid()"
       case PortType =>
@@ -165,6 +213,10 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         s"#$n{}"
       case RefinedRecordType(r, _) =>
         s"#${r.name}{}"
+      case NativeRecordType(id) =>
+        s"#${id.module}:${id.name}{}"
+      case AnyNativeRecordType =>
+        "record()"
       case MapType(props, DynamicType, DynamicType) if props.isEmpty =>
         s"map()"
       case MapType(_, _, _) =>
@@ -179,27 +231,26 @@ case class Show(pipelineContext: Option[PipelineContext]) {
         "dynamic(...)"
     }
 
-  private def showRid(rid: RemoteId, forceShowModule: Boolean = false): String = {
-    pipelineContext match {
-      case Some(ctx)
-          if !forceShowModule &&
-            ((rid.module == "erlang" && builtinTypes.contains(rid.name)) ||
-              rid.module == ctx.module ||
-              (rid == RemoteId("eqwalizer", "dynamic", 0)) ||
-              (rid == RemoteId("eqwalizer", "dynamic", 1))) =>
-        rid.name
-      case _ => s"${rid.module}:${rid.name}"
-    }
-  }
+  private def showRid(rid: RemoteId, forceShowModule: Boolean = false): String =
+    if (
+      !forceShowModule &&
+      ((rid.module == "erlang" && builtinTypes.contains(rid.name)) ||
+        rid.module == pipelineContext.module ||
+        (rid == RemoteId("eqwalizer", "dynamic", 0)) ||
+        (rid == RemoteId("eqwalizer", "dynamic", 1)))
+    )
+      rid.name
+    else
+      s"${rid.module}:${rid.name}"
 }
 
 object Show {
 
   def show(tp: Type)(implicit pipelineContext: PipelineContext): String =
-    Show(Some(pipelineContext)).show(tp)
+    Show(pipelineContext).show(tp)
 
   def showNotSubtype(t1: Type, t2: Type)(implicit pipelineContext: PipelineContext): (String, String) =
-    Show(Some(pipelineContext)).showNotSubtype(t1, t2)
+    Show(pipelineContext).showNotSubtype(t1, t2)
 
   @tailrec
   private def foldCons(cons: Expr, soFar: List[Expr]): (List[Expr], Option[Expr]) = cons match {
@@ -288,6 +339,20 @@ object Show {
       s"...#$recName.$fieldName"
     case RecordIndex(recName, fieldName) =>
       s"#$recName.$fieldName"
+    case NativeRecordCreate(id, _) =>
+      s"#${id.module}:${id.name}{...}"
+    case NativeRecordUpdate(_, name, _) =>
+      val n = name match {
+        case NativeRecordName.Anon          => "_"
+        case NativeRecordName.Qualified(id) => s"${id.module}:${id.name}"
+      }
+      s"...#$n{...}"
+    case NativeRecordSelect(_, name, fieldName) =>
+      val n = name match {
+        case NativeRecordName.Anon          => "_"
+        case NativeRecordName.Qualified(id) => s"${id.module}:${id.name}"
+      }
+      s"...#$n.$fieldName"
     case MapCreate(_) =>
       "#{..}"
     case MapUpdate(_, _) =>

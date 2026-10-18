@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast.stub
@@ -55,6 +59,9 @@ object Db {
   def getImports(module: String): Option[Map[Id, String]] =
     getModuleStub(module).map(_.imports)
 
+  def getNativeRecordImports(module: String): Option[Map[String, String]] =
+    getModuleStub(module).map(_.nativeRecordImports)
+
   def getType(module: String, id: Id): Option[TypeDecl] =
     ELPProxy.typeDecl(module, id).map(_._1)
 
@@ -63,6 +70,9 @@ object Db {
 
   def getRecord(module: String, record: String): Option[RecDecl] =
     ELPProxy.recDecl(module, record)
+
+  def getNativeRecord(module: String, record: String): Option[NativeRecDecl] =
+    ELPProxy.nativeRecDecl(module, record)
 
   def getInvalids(module: String): Option[List[Invalid]] =
     getModuleStub(module).map(_.invalids)

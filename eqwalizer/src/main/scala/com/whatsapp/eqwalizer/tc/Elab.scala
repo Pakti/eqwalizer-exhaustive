@@ -1,14 +1,18 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
 
 import com.whatsapp.eqwalizer.ast.Exprs.*
+import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec, RecDecl, NativeRecField, OverloadedFunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.Guard
-import com.whatsapp.eqwalizer.ast.Forms.RecDecl
 import com.whatsapp.eqwalizer.ast.Pats.{PatMatch, PatVar}
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.stub.Db
@@ -17,9 +21,7 @@ import com.whatsapp.eqwalizer.tc.TcDiagnostics.*
 
 final class Elab(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
-  private lazy val check = pipelineContext.check
   private lazy val elabPat = pipelineContext.elabPat
-  private lazy val elabGuard = pipelineContext.elabGuard
   private lazy val elabApply = pipelineContext.elabApply
   private lazy val elabApplyCustom = pipelineContext.elabApplyCustom
   private lazy val elabApplyOverloaded = pipelineContext.elabApplyOverloaded
@@ -30,6 +32,7 @@ final class Elab(pipelineContext: PipelineContext) {
   private lazy val customReturn = pipelineContext.customReturn
   private lazy val typeInfo = pipelineContext.typeInfo
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
+  private lazy val instantiate = pipelineContext.instantiate
   private implicit val pipelineCtx: PipelineContext = pipelineContext
 
   private def checkPrivateConstructor(pos: Pos, recDecl: RecDecl): Unit =
@@ -44,15 +47,40 @@ final class Elab(pipelineContext: PipelineContext) {
         diagnosticsInfo.add(InvalidPrivateConstructor(pos, recDecl.name, s"multiple owner modules: ${owners.mkString(", ")}"))
     }
 
-  def elabBody(body: Body, env: Env): (Type, Env) = {
-    val exprs = body.exprs
-    var (elabType, envAcc) = elabExpr(exprs.head, env)
-    for (expr <- exprs.tail) {
-      val (t1, env1) = elabExpr(expr, envAcc)
-      elabType = t1
-      envAcc = env1
+  def checkFun(f: FunDecl, spec: FunSpec): Unit = {
+    val (_, FunType(_, argTys, resTy)) = instantiate.instantiate(spec.ty)
+    val clauseEnvs = occurrence.clausesEnvs(f.clauses, argTys, Env.empty)
+    val singleClause = f.clauses.length == 1
+    f.clauses
+      .lazyZip(1 to f.clauses.length)
+      .lazyZip(clauseEnvs)
+      .foreach((clause, index, occEnv) =>
+        elabClause(
+          clause,
+          argTys,
+          occEnv,
+          Set.empty,
+          resTy,
+          checkCoverage = true,
+          fullCoverage = singleClause || (index != f.clauses.length),
+        )
+      )
+  }
+
+  def checkOverloadedFun(f: FunDecl, overloadedSpec: OverloadedFunSpec): Unit =
+    overloadedSpec.tys.foreach { ft0 =>
+      val (_, FunType(_, argTys, resTy)) = instantiate.instantiate(ft0)
+      val clauseEnvs = occurrence.clausesEnvs(f.clauses, argTys, Env.empty)
+      f.clauses
+        .lazyZip(clauseEnvs)
+        .foreach((clause, occEnv) => elabClause(clause, argTys, occEnv, Set.empty, resTy, checkReachability = true))
     }
-    (elabType, envAcc)
+
+  def elabBody(body: Body, env: Env, expected: Type = AnyType): (Type, Env) = {
+    var envAcc = env
+    for (expr <- body.exprs.init)
+      envAcc = elabExpr(expr, envAcc)._2
+    elabExpr(body.exprs.last, envAcc, expected)
   }
 
   def elabClause(
@@ -60,24 +88,28 @@ final class Elab(pipelineContext: PipelineContext) {
       argTys: List[Type],
       env0: Env,
       exportedVars: Set[String],
+      expected: Type = AnyType,
       checkReachability: Boolean = false,
+      checkCoverage: Boolean = false,
+      fullCoverage: Boolean = false,
   ): (Type, Env) = {
     val patVars = Vars.clausePatVars(clause)
     val env1 = util.enterScope(env0, patVars)
-    // see D29637051 for why we elabGuard twice
-    val env2 = typeInfo.withoutTypeCollection {
-      elabGuard.elabGuards(clause.guards, env1)
+    // Refine guards before patterns (so refinements feed pattern elaboration)
+    val env2 = occurrence.refineGuards(clause.guards, env1)
+    val (patTys, env3) = elabPat.elabPats(clause.pats, argTys, env2)
+    occurrence.annotateGuards(clause.guards, env3)
+    val hasEmptyType = env3.exists { case (_, ty) => Subtype.isNoneType(ty) }
+    if (checkReachability && (hasEmptyType || patTys.exists(Subtype.isNoneType)))
+      return (NoneType, util.exitScope(env0, env3, exportedVars))
+    val (eType, env4) = elabBody(clause.body, env3, expected)
+    val env5 = util.exitScope(env0, env4, exportedVars)
+    if (subtype.gradualSubType(eType, NoneType)) (NoneType, env5.map { case (name, _) => name -> NoneType })
+    else {
+      if (hasEmptyType && checkCoverage && (fullCoverage || !occurrence.clauseCovered(clause, argTys)))
+        diagnosticsInfo.add(ClauseNotCovered(clause.pos))
+      (eType, env5)
     }
-    val (_, env3) = elabPat.elabPats(clause.pats, argTys, env2)
-    val env4 = elabGuard.elabGuards(clause.guards, env3)
-    if (checkReachability && env4.exists { case (_, ty) => subtype.isNoneType(ty) })
-      return (NoneType, util.exitScope(env0, env4, exportedVars))
-    val (eType, env5) = elabBody(clause.body, env4)
-    val env6 = util.exitScope(env0, env5, exportedVars)
-    if (subtype.gradualSubType(eType, NoneType))
-      (NoneType, env6.map { case (name, _) => name -> NoneType })
-    else
-      (eType, env6)
   }
 
   def elabExprs(exprs: List[Expr], env: Env): (List[Type], Env) = {
@@ -90,23 +122,25 @@ final class Elab(pipelineContext: PipelineContext) {
     (tys, envAcc)
   }
 
-  private def elabMaybeBody(body: Body, env: Env): (Type, Env) = {
+  private def elabMaybe(maybe: Maybe, env: Env): (Type, Env) = {
     var envAcc = env
     var tyAcc: Type = NoneType
     var lastTy: Type = NoneType
-    val exprs = body.exprs
+    val exprs = maybe.body.exprs
     for (expr <- exprs) {
       expr match {
         case MaybeMatch(Pats.PatAtom("true"), mExp) if Filters.asTest(mExp).isDefined =>
           val test = Filters.asTest(mExp).get
-          val env1 = elabGuard.elabGuards(List(Guard(List(test))), env)
-          tyAcc = subtype.join(tyAcc, booleanType)
-          lastTy = trueType
-          envAcc = env1
+          val (mType, _) = elabExpr(mExp, envAcc)
+          val elseTy = occurrence.remove(mType, trueType)
+          envAcc = occurrence.testEnv(test, envAcc, result = true)
+          tyAcc = subtype.join(tyAcc, elseTy)
+          lastTy = mType
         case MaybeMatch(mPat, mExp) =>
           val (mType, env1) = elabExpr(mExp, envAcc)
           val (patTy, env2) = elabPat.elabPat(mPat, mType, env1)
-          tyAcc = subtype.join(tyAcc, mType)
+          val elseTy = occurrence.remove(mType, patTy)
+          tyAcc = subtype.join(tyAcc, elseTy)
           lastTy = patTy
           envAcc = env2
         case _ =>
@@ -118,17 +152,143 @@ final class Elab(pipelineContext: PipelineContext) {
     (subtype.join(tyAcc, lastTy), env)
   }
 
-  def elabExprAndCheck(expr: Expr, env: Env, ty: Type): (Type, Env) = {
-    val (exprTy, env1) = elabExpr(expr, env)
-    if (!subtype.subType(exprTy, ty)) {
-      diagnosticsInfo.add(ExpectedSubtype(expr.pos, expr, expected = ty, got = exprTy))
-      (DynamicType, env1)
-    } else {
-      (exprTy, env1)
+  /** Elaborates `expr`, checking it against `expected`. Branching forms propagate `expected` to their
+    * branches, so mismatches are reported at the innermost expression. On mismatch the type is `DynamicType`.
+    */
+  def elabExpr(expr: Expr, env: Env, expected: Type = AnyType): (Type, Env) =
+    expr match {
+      case lambda: Lambda if !subtype.subType(AnyType, expected) =>
+        val (env1, typed) = checkLambda(lambda, expected, env)
+        (if (typed) expected else DynamicType, env1)
+      case DynCall(l: Lambda, args) =>
+        val arity = l.clauses.head.pats.size
+        val (argTys, env1) = elabExprs(args, env)
+        if (arity != args.size) {
+          diagnosticsInfo.add(LambdaArityMismatch(l.pos, l, lambdaArity = arity, argsArity = args.size))
+          return (DynamicType, env1)
+        }
+        l.name match {
+          case Some(name) =>
+            val resTy = if (subtype.subType(AnyType, expected)) DynamicType else expected
+            val funType = FunType(0, List.fill(argTys.size)(DynamicType), resTy)
+            if (arity > 0 && pipelineCtx.reportDynamicLambdas && typeInfo.isCollect) {
+              diagnosticsInfo.add(DynamicLambda(l.pos))
+            }
+            elabExpr(l, env.updated(name, funType), funType)
+            (resTy, env1)
+          case _ =>
+            val envs = occurrence.clausesEnvs(l.clauses, argTys, env1)
+            val (resTys, resEnvs) =
+              l.clauses
+                .lazyZip(envs)
+                .map((clause, occEnv) => elabClause(clause, argTys, occEnv, Set.empty, expected))
+                .unzip
+            val resEnv = if (args.isEmpty) subtype.joinEnvs(resEnvs) else env1
+            (subtype.join(resTys), resEnv)
+        }
+      case Block(block) =>
+        elabBody(block, env, expected)
+      case c: Case if Predicates.isCaseIf(c) =>
+        // Elaborate test expression to store its type info
+        elabExpr(c.expr, env)
+        elabExpr(Predicates.asIf(c), env, expected)
+      case Case(call @ RemoteCall(id, args), clauses)
+          if Predicates.booleanClauses(clauses) && elabApplyCustom.isCustomPredicate(id) =>
+        val (_, posEnv, negEnv) = elabApplyCustom.elabCustomPredicate(id, args, env, call.pos)
+        val (posClause, negClause) = Predicates.posNegClauses(clauses)
+        val effVars = Vars.clausesVars(clauses)
+        val (posT, posEnv1) =
+          elabClause(posClause, List(booleanType), posEnv, effVars, expected)
+        val (negT, negEnv1) =
+          elabClause(negClause, List(booleanType), negEnv, effVars, expected)
+        (subtype.join(posT, negT), subtype.joinEnvs(List(posEnv1, negEnv1)))
+      case c @ Case(sel, clauses) =>
+        val (selTy, env1) = elabExpr(sel, env)
+        val effVars = Vars.clausesVars(clauses)
+        val clauseEnvs = occurrence.caseEnvs(c, selTy, env1)
+        val (ts, envs) = clauses
+          .lazyZip(clauseEnvs)
+          .map((clause, occEnv) => elabClause(clause, List(selTy), occEnv, effVars, expected))
+          .unzip
+        (subtype.join(ts), subtype.joinEnvs(envs))
+      case i @ If(clauses) =>
+        val effVars = Vars.clausesVars(clauses)
+        val clauseEnvs = occurrence.ifEnvs(i, env)
+        val (ts, envs) = clauses
+          .lazyZip(clauseEnvs)
+          .map((clause, occEnv) => elabClause(clause, List.empty, occEnv, effVars, expected))
+          .unzip
+        (subtype.join(ts), subtype.joinEnvs(envs))
+      case TryCatchExpr(tryBody, catchClauses, afterBody) =>
+        val (tryT, _) = elabBody(tryBody, env, expected)
+        val stackType = clsExnStackTypeDynamic
+        val catchEnvs = occurrence.clausesEnvs(catchClauses, List(stackType), env)
+        val (catchTs, _) = catchClauses
+          .lazyZip(catchEnvs)
+          .map((clause, occEnv) => elabClause(clause, List(stackType), occEnv, Set.empty, expected))
+          .unzip
+        val env1 = afterBody match {
+          case Some(block) => elabBody(block, env)._2
+          case None        => env
+        }
+        (subtype.join(tryT :: catchTs), env1)
+      case TryOfCatchExpr(tryBody, tryClauses, catchClauses, afterBody) =>
+        val (tryT, tryEnv) = elabBody(tryBody, env)
+        val stackType = clsExnStackTypeDynamic
+        val tryEnvs = occurrence.clausesEnvs(tryClauses, List(tryT), tryEnv)
+        val (tryTs, _) =
+          tryClauses
+            .lazyZip(tryEnvs)
+            .map((clause, occEnv) => elabClause(clause, List(tryT), occEnv, Set.empty, expected))
+            .unzip
+        val catchEnvs = occurrence.clausesEnvs(catchClauses, List(stackType), env)
+        val (catchTs, _) = catchClauses
+          .lazyZip(catchEnvs)
+          .map((clause, occEnv) => elabClause(clause, List(stackType), occEnv, Set.empty, expected))
+          .unzip
+        val env1 = afterBody match {
+          case Some(block) => elabBody(block, env)._2
+          case None        => env
+        }
+        (subtype.join(tryTs ::: catchTs), env1)
+      case Receive(clauses) =>
+        val effVars = Vars.clausesVars(clauses)
+        val argType = DynamicType
+        val clauseEnvs = occurrence.clausesEnvs(clauses, List(argType), env)
+        val (ts, envs) = clauses
+          .lazyZip(clauseEnvs)
+          .map((clause, occEnv) => elabClause(clause, List(argType), occEnv, effVars, expected))
+          .unzip
+        (subtype.join(ts), subtype.joinEnvs(envs))
+      case ReceiveWithTimeout(List(), timeout, timeoutBlock) =>
+        val (_, env1) = elabExpr(timeout, env, builtinTypes("timeout"))
+        elabBody(timeoutBlock, env1, expected)
+      case ReceiveWithTimeout(clauses, timeout, timeoutBlock) =>
+        val effVars = Vars.clausesAndBlockVars(clauses, timeoutBlock)
+        val argType = DynamicType
+        val clauseEnvs = occurrence.clausesEnvs(clauses, List(argType), env)
+        val (ts, envs) = clauses
+          .lazyZip(clauseEnvs)
+          .map((clause, occEnv) => elabClause(clause, List(argType), occEnv, effVars, expected))
+          .unzip
+        val (_, env1) = elabExpr(timeout, env, builtinTypes("timeout"))
+        val (timeoutT, timeoutEnv) = elabBody(timeoutBlock, env1, expected)
+        (subtype.join(timeoutT :: ts), subtype.joinEnvs(timeoutEnv :: envs))
+      case MaybeElse(body, elseClauses) =>
+        val (bodyType, _) = elabBody(body, env, expected)
+        val argType = DynamicType
+        val (ts, _) = elseClauses.map(elabClause(_, List(argType), env, Set.empty, expected)).unzip
+        (subtype.join(bodyType :: ts), env)
+      case _ =>
+        val (ty, env1) = synthExpr(expr, env)
+        if (subtype.subType(ty, expected)) (ty, env1)
+        else {
+          diagnosticsInfo.add(ExpectedSubtype(expr.pos, expr, expected = expected, got = ty))
+          (DynamicType, env1)
+        }
     }
-  }
 
-  def elabExpr(expr: Expr, env: Env): (Type, Env) =
+  private def synthExpr(expr: Expr, env: Env): (Type, Env) =
     expr match {
       case Var(v) =>
         val ty = env.getOrElse(v, { diagnosticsInfo.add(UnboundVar(expr.pos, v)); DynamicType })
@@ -137,9 +297,9 @@ final class Elab(pipelineContext: PipelineContext) {
       case AtomLit(a) =>
         (AtomLitType(a), env)
       case FloatLit() =>
-        (NumberType, env)
+        (FloatType, env)
       case IntLit(_) =>
-        (NumberType, env)
+        (IntegerType, env)
       case Tuple(elems) =>
         var envAcc = env
         val elemTypes = elems.map { elem =>
@@ -159,7 +319,7 @@ final class Elab(pipelineContext: PipelineContext) {
         (resType, env1)
       case Cons(head, tail) =>
         val (headT, env1) = elabExpr(head, env)
-        val (tailT, env2) = elabExprAndCheck(tail, env1, ListType(AnyType))
+        val (tailT, env2) = elabExpr(tail, env1, ListType(AnyType))
         val resType = narrow.asListType(tailT) match {
           case Some(ListType(t)) => ListType(subtype.join(headT, t))
           case None              => ListType(headT)
@@ -181,35 +341,9 @@ final class Elab(pipelineContext: PipelineContext) {
             resTy = customReturn.customizeResultType(funId, args, argTys, resTy)
           (resTy, env1)
         }
-      case DynCall(l: Lambda, args) =>
-        val arity = l.clauses.head.pats.size
-        val (argTys, env1) = elabExprs(args, env)
-        if (arity != args.size) {
-          diagnosticsInfo.add(LambdaArityMismatch(l.pos, l, lambdaArity = arity, argsArity = args.size))
-          return (DynamicType, env1)
-        }
-        l.name match {
-          case Some(name) =>
-            val funType = FunType(0, List.fill(argTys.size)(DynamicType), DynamicType)
-            if (arity > 0 && pipelineCtx.reportDynamicLambdas && typeInfo.isCollect) {
-              diagnosticsInfo.add(DynamicLambda(l.pos))
-            }
-            val env2 = env.updated(name, funType)
-            check.checkExpr(l, funType, env2)
-            (DynamicType, env1)
-          case _ =>
-            val envs = occurrence.clausesEnvs(l.clauses, argTys, env1)
-            val (resTys, resEnvs) =
-              l.clauses
-                .lazyZip(envs)
-                .map((clause, occEnv) => elabClause(clause, argTys, occEnv, Set.empty))
-                .unzip
-            val resEnv = if (args.isEmpty) subtype.joinEnvs(resEnvs) else env1
-            (subtype.join(resTys), resEnv)
-        }
       case DynCall(DynRemoteFun(mod, name), args) =>
-        val env1 = check.checkExpr(mod, AtomType, env)
-        val env2 = check.checkExpr(name, AtomType, env1)
+        val (_, env1) = elabExpr(mod, env, AtomType)
+        val (_, env2) = elabExpr(name, env1, AtomType)
         val (_argTys, env3) = elabExprs(args, env)
         (DynamicType, env3)
       case DynCall(f, args) =>
@@ -231,12 +365,10 @@ final class Elab(pipelineContext: PipelineContext) {
           val resTys = funTys.map(elabApply.elabApply(_, args, argTys, env2, expr.pos))
           (subtype.join(resTys), env2)
         }
-      case DynRemoteFun(mod, name) =>
-        throw new IllegalStateException(s"unexpected $expr")
       case DynRemoteFunArity(mod, name, arityExpr) =>
-        val env1 = check.checkExpr(mod, AtomType, env)
-        val env2 = check.checkExpr(name, AtomType, env1)
-        val env3 = check.checkExpr(arityExpr, NumberType, env2)
+        val (_, env1) = elabExpr(mod, env, AtomType)
+        val (_, env2) = elabExpr(name, env1, AtomType)
+        val (_, env3) = elabExpr(arityExpr, env2, IntegerType)
         val funType =
           arityExpr match {
             case IntLit(Some(arity)) =>
@@ -289,47 +421,13 @@ final class Elab(pipelineContext: PipelineContext) {
             if (pipelineCtx.reportDynamicLambdas && typeInfo.isCollect) {
               diagnosticsInfo.add(DynamicLambda(lambda.pos))
             }
-            check.checkExpr(lambda, funType, env1)
+            elabExpr(lambda, env1, funType)
           }
           (funType, env)
         }
-      case Block(block) =>
-        elabBody(block, env)
-      case c: Case if Predicates.isCaseIf(c) =>
-        // Elaborate test expression to store its type info
-        val (_, _) = elabExpr(c.expr, env)
-        val ifExpr = Predicates.asIf(c)
-        elabExpr(ifExpr, env)
-      case Case(call @ RemoteCall(id, args), clauses)
-          if Predicates.booleanClauses(clauses) && elabApplyCustom.isCustomPredicate(id) =>
-        val (_, posEnv, negEnv) = elabApplyCustom.elabCustomPredicate(id, args, env, call.pos)
-        val (posClause, negClause) = Predicates.posNegClauses(clauses)
-        val effVars = Vars.clausesVars(clauses)
-        val (posT, posEnv1) =
-          elabClause(posClause, List(booleanType), posEnv, effVars)
-        val (negT, negEnv1) =
-          elabClause(negClause, List(booleanType), negEnv, effVars)
-        (subtype.join(posT, negT), subtype.joinEnvs(List(posEnv1, negEnv1)))
-      case c @ Case(sel, clauses) =>
-        val (selTy, env1) = elabExpr(sel, env)
-        val effVars = Vars.clausesVars(clauses)
-        val clauseEnvs = occurrence.caseEnvs(c, selTy, env1)
-        val (ts, envs) = clauses
-          .lazyZip(clauseEnvs)
-          .map((clause, occEnv) => elabClause(clause, List(selTy), occEnv, effVars))
-          .unzip
-        (subtype.join(ts), subtype.joinEnvs(envs))
-      case i @ If(clauses) =>
-        val effVars = Vars.clausesVars(clauses)
-        val clauseEnvs = occurrence.ifEnvs(i, env)
-        val (ts, envs) = clauses
-          .lazyZip(clauseEnvs)
-          .map((clause, occEnv) => elabClause(clause, List.empty, occEnv, effVars))
-          .unzip
-        (subtype.join(ts), subtype.joinEnvs(envs))
       case Match(Pats.PatAtom("true"), mExp) if Filters.asTest(mExp).isDefined =>
         val test = Filters.asTest(mExp).get
-        val env1 = elabGuard.elabGuards(List(Guard(List(test))), env)
+        val env1 = occurrence.testEnv(test, env, result = true)
         (AtomLitType("true"), env1)
       case Match(mPat1, m @ Match(mPat2, mExp)) =>
         elabExpr(Match(PatMatch(mPat1, mPat2)(m.pos), mExp)(expr.pos), env)
@@ -340,18 +438,25 @@ final class Elab(pipelineContext: PipelineContext) {
       case UnOp(op, arg) =>
         op match {
           case "not" =>
-            val env1 = check.checkExpr(arg, booleanType, env)
+            val (_, env1) = elabExpr(arg, env, booleanType)
             (booleanType, env1)
-          case "bnot" | "-" | "+" =>
-            val env1 = check.checkExpr(arg, NumberType, env)
-            (NumberType, env1)
+          case "bnot" =>
+            val (_, env1) = elabExpr(arg, env, IntegerType)
+            (IntegerType, env1)
+          case "-" | "+" =>
+            val (argTy, env1) = elabExpr(arg, env)
+            if (subtype.subType(argTy, numberType)) (argTy, env1)
+            else {
+              diagnosticsInfo.add(ExpectedSubtype(arg.pos, arg, expected = numberType, got = argTy))
+              (DynamicType, env1)
+            }
           case _ =>
             throw UnhandledOp(expr.pos, op)
         }
       case BinOp("orelse", testArg, RemoteCall(RemoteId("erlang", "throw" | "error" | "exit", _), _))
           if Filters.asTest(testArg).isDefined =>
         val test = Filters.asTest(testArg).get
-        val env1 = elabGuard.elabGuards(List(Guard(List(test))), env)
+        val env1 = occurrence.testEnv(test, env, result = true)
         (AtomLitType("true"), env1)
       case BinOp(
             "orelse",
@@ -367,16 +472,37 @@ final class Elab(pipelineContext: PipelineContext) {
         (AtomLitType("false"), env1)
       case BinOp(op, arg1, arg2) =>
         op match {
-          case "+" | "-" | "*" | "/" | "div" | "rem" | "band" | "bor" | "bxor" | "bsl" | "bsr" =>
-            val env1 = check.checkExpr(arg1, NumberType, env)
-            val env2 = check.checkExpr(arg2, NumberType, env1)
-            (NumberType, env2)
+          case "div" | "rem" | "band" | "bor" | "bxor" | "bsl" | "bsr" =>
+            val (_, env1) = elabExpr(arg1, env, IntegerType)
+            val (_, env2) = elabExpr(arg2, env1, IntegerType)
+            (IntegerType, env2)
+          case "/" =>
+            val (_, env1) = elabExpr(arg1, env, numberType)
+            val (_, env2) = elabExpr(arg2, env1, numberType)
+            (FloatType, env2)
+          case "*" | "+" | "-" =>
+            val (arg1Ty, env1) = elabExpr(arg1, env)
+            val (arg2Ty, env2) = elabExpr(arg2, env1)
+            val v1 = subtype.subType(arg1Ty, numberType)
+            val v2 = subtype.subType(arg2Ty, numberType)
+            if (v1 && v2) {
+              if (subtype.gradualEqv(arg1Ty, FloatType) || subtype.gradualEqv(arg2Ty, FloatType))
+                (FloatType, env2)
+              else
+                (subtype.join(arg1Ty, arg2Ty), env2)
+            } else {
+              if (!v1)
+                diagnosticsInfo.add(ExpectedSubtype(arg1.pos, arg1, expected = numberType, got = arg1Ty))
+              if (!v2)
+                diagnosticsInfo.add(ExpectedSubtype(arg2.pos, arg2, expected = numberType, got = arg2Ty))
+              (DynamicType, env2)
+            }
           case "or" | "and" | "xor" =>
-            val env1 = check.checkExpr(arg1, booleanType, env)
-            val env2 = check.checkExpr(arg2, booleanType, env1)
+            val (_, env1) = elabExpr(arg1, env, booleanType)
+            val (_, env2) = elabExpr(arg2, env1, booleanType)
             (booleanType, env2)
           case "orelse" =>
-            val env1 = check.checkExpr(arg1, booleanType, env)
+            val (_, env1) = elabExpr(arg1, env, booleanType)
             Filters.asTest(arg1) match {
               case Some(test) =>
                 val ifClause1 =
@@ -389,12 +515,12 @@ final class Elab(pipelineContext: PipelineContext) {
                 (subtype.join(trueType, t2), env2)
             }
           case "andalso" =>
-            val (t1, env1) = elabExprAndCheck(arg1, env, booleanType)
+            val (t1, env1) = elabExpr(arg1, env, booleanType)
             val env1Refined = Filters.asTest(arg1) match {
               case None =>
                 env1
               case Some(test) =>
-                val env11 = elabGuard.elabGuards(List(Guard(List(test))), env1)
+                val env11 = occurrence.testEnv(test, env1, result = true)
                 env11
             }
             val t1False = subtype.subType(t1, falseType) && !subtype.subType(t1, trueType)
@@ -415,8 +541,8 @@ final class Elab(pipelineContext: PipelineContext) {
             val sendCall = RemoteCall(RemoteId("erlang", "send", 2), List(arg1, arg2))(expr.pos)
             elabExpr(sendCall, env)
           case "++" | "--" =>
-            val (arg1Ty, env1) = elabExprAndCheck(arg1, env, ListType(AnyType))
-            val (arg2Ty, env2) = elabExprAndCheck(arg2, env1, ListType(AnyType))
+            val (arg1Ty, env1) = elabExpr(arg1, env, ListType(AnyType))
+            val (arg2Ty, env2) = elabExpr(arg2, env1, ListType(AnyType))
             val resTy =
               if (op == "--") arg1Ty
               else {
@@ -439,55 +565,16 @@ final class Elab(pipelineContext: PipelineContext) {
         val (strictType, _) = elabExpr(cExpr, env)
         val resultType = UnionType(Set(strictType, DynamicType))
         (resultType, env)
-      case TryCatchExpr(tryBody, catchClauses, afterBody) =>
-        val (tryT, _) = elabBody(tryBody, env)
-        val stackType = clsExnStackTypeDynamic
-        val (catchTs, _) = catchClauses.map(elabClause(_, List(stackType), env, Set.empty)).unzip
-        val env1 = afterBody match {
-          case Some(block) => elabBody(block, env)._2
-          case None        => env
-        }
-        (subtype.join(tryT :: catchTs), env1)
-      case TryOfCatchExpr(tryBody, tryClauses, catchClauses, afterBody) =>
-        val (tryT, tryEnv) = elabBody(tryBody, env)
-        val stackType = clsExnStackTypeDynamic
-        val tryEnvs = occurrence.clausesEnvs(tryClauses, List(tryT), tryEnv)
-        val (tryTs, _) =
-          tryClauses
-            .lazyZip(tryEnvs)
-            .map((clause, occEnv) => elabClause(clause, List(tryT), occEnv, Set.empty))
-            .unzip
-        val (catchTs, _) = catchClauses.map(elabClause(_, List(stackType), env, Set.empty)).unzip
-        val env1 = afterBody match {
-          case Some(block) => elabBody(block, env)._2
-          case None        => env
-        }
-        (subtype.join(tryTs ::: catchTs), env1)
-      case Receive(clauses) =>
-        val effVars = Vars.clausesVars(clauses)
-        val argType = DynamicType
-        val (ts, envs) = clauses.map(elabClause(_, List(argType), env, effVars)).unzip
-        (subtype.join(ts), subtype.joinEnvs(envs))
-      case ReceiveWithTimeout(List(), timeout, timeoutBlock) =>
-        val env1 = check.checkExpr(timeout, builtinTypes("timeout"), env)
-        elabBody(timeoutBlock, env1)
-      case ReceiveWithTimeout(clauses, timeout, timeoutBlock) =>
-        val effVars = Vars.clausesAndBlockVars(clauses, timeoutBlock)
-        val argType = DynamicType
-        val (ts, envs) = clauses.map(elabClause(_, List(argType), env, effVars)).unzip
-        val env1 = check.checkExpr(timeout, builtinTypes("timeout"), env)
-        val (timeoutT, timeoutEnv) = elabBody(timeoutBlock, env1)
-        (subtype.join(timeoutT :: ts), subtype.joinEnvs(timeoutEnv :: envs))
       case LComprehension(template, qualifiers) =>
         val qEnv = elabQualifiers(qualifiers, env)
         val (tType, _) = elabExpr(template, qEnv)
         (ListType(tType), env)
       case BComprehension(template, qualifiers) =>
         val qEnv = elabQualifiers(qualifiers, env)
-        check.checkExpr(template, BinaryType, qEnv)
+        elabExpr(template, qEnv, BinaryType)
         (BinaryType, env)
       case MComprehension(kTemplate, vTemplate, List(MGenerate(gk: PatVar, gv: PatVar, gExpr))) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, env, mapOrIterTy)
+        val (gT, gEnv) = elabExpr(gExpr, env, mapOrIterTy)
         val mapT = narrow.asMapOrIterTypes(gT)
         val kvTys = mapT.flatMap(narrow.getKVType)
         var mapsAcc: Set[MapType] = Set()
@@ -501,7 +588,7 @@ final class Elab(pipelineContext: PipelineContext) {
         }
         (narrow.joinAndMergeMaps(mapsAcc), env)
       case MComprehension(kTemplate, vTemplate, List(MGenerateStrict(gk: PatVar, gv: PatVar, gExpr))) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, env, mapOrIterTy)
+        val (gT, gEnv) = elabExpr(gExpr, env, mapOrIterTy)
         val mapT = narrow.asMapOrIterTypes(gT)
         val kvTys = mapT.flatMap(narrow.getKVType)
         var mapsAcc: Set[MapType] = Set()
@@ -524,17 +611,17 @@ final class Elab(pipelineContext: PipelineContext) {
       case rUpdate: RecordUpdate =>
         elabRecordUpdate(rUpdate, env)
       case RecordSelect(recExpr, recName, fieldName) =>
-        val recDeclOpt = util.getRecord(module, recName)
-        recDeclOpt match {
-          case Some(recDecl) =>
-            val (elabTy, elabEnv) = elabExprAndCheck(recExpr, env, RecordType(recName)(module))
-            (narrow.getRecordField(recDecl, elabTy, fieldName), elabEnv)
-          case None =>
-            diagnosticsInfo.add(UnboundRecord(expr.pos, recName))
-            (DynamicType, env)
-        }
+        val recDecl = util.getRecord(module, recName)
+        val (elabTy, elabEnv) = elabExpr(recExpr, env, RecordType(recName)(module))
+        (narrow.getRecordField(recDecl, elabTy, fieldName), elabEnv)
       case RecordIndex(_, _) =>
-        (NumberType, env)
+        (IntegerType, env)
+      case rUpdate: NativeRecordUpdate =>
+        elabNativeRecordUpdate(rUpdate, env)
+      case rCreate: NativeRecordCreate =>
+        elabNativeRecordCreate(rCreate, env)
+      case nrSelect: NativeRecordSelect =>
+        elabNativeRecordSelect(nrSelect, env)
       case MapCreate(kvs) =>
         var envAcc = env
         val (props, kts) = kvs.partitionMap { case (kExpr, vExpr) =>
@@ -542,7 +629,7 @@ final class Elab(pipelineContext: PipelineContext) {
             case Some(key) =>
               val (valT, env1) = elabExpr(vExpr, envAcc)
               envAcc = env1
-              Left(key -> Prop(req = true, valT))
+              Left(key -> MapProp(req = true, valT))
             case None =>
               val (keyT, env1) = elabExpr(kExpr, envAcc)
               val (valT, env2) = elabExpr(vExpr, env1)
@@ -555,7 +642,7 @@ final class Elab(pipelineContext: PipelineContext) {
         val codomain = subtype.join(valTs)
         (MapType(props.toMap, domain, codomain), envAcc)
       case MapUpdate(map, kvs) =>
-        val (mapT, env1) = elabExprAndCheck(map, env, MapType(Map(), AnyType, AnyType))
+        val (mapT, env1) = elabExpr(map, env, MapType(Map(), AnyType, AnyType))
         var envAcc = env1
         var resT = narrow.asMapTypes(mapT)
         for ((key, value) <- kvs) {
@@ -568,13 +655,8 @@ final class Elab(pipelineContext: PipelineContext) {
       case MaybeMatch(mPat, mExp) =>
         val (mType, env1) = elabExpr(mExp, env)
         elabPat.elabPat(mPat, mType, env1)
-      case Maybe(body) =>
-        elabMaybeBody(body, env)
-      case MaybeElse(body, elseClauses) =>
-        val (bodyType, _) = elabBody(body, env)
-        val argType = DynamicType
-        val (ts, _) = elseClauses.map(elabClause(_, List(argType), env, Set.empty)).unzip
-        (subtype.join(bodyType :: ts), env)
+      case m: Maybe =>
+        elabMaybe(m, env)
       case TypeCast(expr, ty, checked) =>
         val validTy = {
           Db.validateType(ty) match {
@@ -588,31 +670,71 @@ final class Elab(pipelineContext: PipelineContext) {
         if (checked && !subtype.subType(exprTy, validTy))
           diagnosticsInfo.add(ExpectedSubtype(expr.pos, expr, expected = validTy, got = exprTy))
         (validTy, env1)
+      case _ =>
+        throw new IllegalStateException(s"unexpected $expr")
     }
 
-  def elabBinaryElem(elem: BinaryElem, env: Env): (Type, Env) = {
+  def checkLambda(lambda: Lambda, resTy: Type, env: Env): (Env, Boolean) =
+    resTy match {
+      case t: FunType =>
+        checkLambdaFunType(lambda, t, env)
+      case _ =>
+        narrow.asFunTypes(resTy, lambda.clauses.head.pats.size).toList match {
+          case List(funTy) =>
+            checkLambdaFunType(lambda, funTy, env)
+          case _ =>
+            val (ty, _) = elabExpr(lambda, env)
+            if (!subtype.subType(ty, resTy)) {
+              diagnosticsInfo.add(ExpectedSubtype(lambda.pos, lambda, expected = resTy, got = ty))
+              (env, false)
+            } else (env, true)
+        }
+    }
+
+  private def checkLambdaFunType(lambda: Lambda, funTy: FunType, env: Env): (Env, Boolean) = {
+    val FunType(_, fParamTys, fResTy) = funTy
+    val arity = lambda.clauses.head.pats.size
+    if (arity != fParamTys.size) {
+      diagnosticsInfo.add(LambdaArityMismatch(lambda.pos, lambda, lambdaArity = arity, argsArity = fParamTys.size))
+      return (env, false)
+    }
+    val env1 = lambda.name match {
+      case Some(name) =>
+        env.updated(name, funTy)
+      case _ =>
+        env
+    }
+    val envs = occurrence.clausesEnvs(lambda.clauses, fParamTys, env1)
+
+    var typed: Boolean = true
+    for ((clause, occEnv) <- lambda.clauses.lazyZip(envs)) {
+      val (infResType, _) = elabClause(clause, fParamTys, occEnv, Set.empty)
+      if (!subtype.subType(infResType, fResTy)) {
+        val expr = clause.body.exprs.last
+        diagnosticsInfo.add(ExpectedSubtype(expr.pos, expr, expected = fResTy, got = infResType))
+        typed = false
+      }
+    }
+    (env, typed)
+  }
+
+  private def elabBinaryElem(elem: BinaryElem, env: Env): (Type, Env) = {
     val env1 = elem.size match {
-      case Some(s) => check.checkExpr(s, NumberType, env)
+      case Some(s) => elabExpr(s, env, IntegerType)._2
       case None    => env
     }
     val isStringLiteral = elem.expr.isInstanceOf[StringLit]
     val expType = Specifier.expType(elem.specifier, isStringLiteral)
-    val env2 = check.checkExpr(elem.expr, expType, env1)
+    val (_, env2) = elabExpr(elem.expr, env1, expType)
     (expType, env2)
   }
 
-  def elabRecordCreate(rCreate: RecordCreate, env: Env): (Type, Env) = {
+  private def elabRecordCreate(rCreate: RecordCreate, env: Env): (Type, Env) = {
     val RecordCreate(recName, fields) = rCreate
     val recType = RecordType(recName)(module)
     val namedFields = fields.collect { case n: RecordFieldNamed => n }
     val genFieldOpt = fields.collectFirst { case g: RecordFieldGen => g }
-    val recDecl =
-      util.getRecord(module, recName) match {
-        case Some(rd) => rd
-        case None =>
-          diagnosticsInfo.add(UnboundRecord(rCreate.pos, recName))
-          return (DynamicType, env)
-      }
+    val recDecl = util.getRecord(module, recName)
     checkPrivateConstructor(rCreate.pos, recDecl)
     var refinedFields: Map[String, Type] = Map.empty
 
@@ -623,13 +745,10 @@ final class Elab(pipelineContext: PipelineContext) {
         val genNames = (recDecl.fMap.keySet -- namedFields.map(_.name)).toList.sorted
         for (genName <- genNames) {
           val fieldDecl = recDecl.fMap(genName)
-          if (fieldDecl.refinable) {
-            val (fTy, fEnv) = elabExprAndCheck(genField.value, envAcc, fieldDecl.tp)
+          val (fTy, fEnv) = elabExpr(genField.value, envAcc, fieldDecl.tp)
+          if (fieldDecl.refinable)
             refinedFields += (fieldDecl.name -> fTy)
-            envAcc = fEnv
-          } else {
-            envAcc = check.checkExpr(genField.value, fieldDecl.tp, envAcc)
-          }
+          envAcc = fEnv
         }
       case None =>
         val undefinedFields = (recDecl.fMap.keySet -- namedFields.map(_.name)).toList.sorted
@@ -643,7 +762,7 @@ final class Elab(pipelineContext: PipelineContext) {
               if (refinable)
                 refinedFields += (uField -> undefined)
             case Some(defVal) =>
-              val (valTy, envVal) = elabExprAndCheck(defVal, env, fieldDecl.tp)
+              val (valTy, envVal) = elabExpr(defVal, env, fieldDecl.tp)
               if (refinable)
                 refinedFields += (uField -> valTy)
               envAcc = envVal
@@ -653,81 +772,255 @@ final class Elab(pipelineContext: PipelineContext) {
 
     for (namedField <- namedFields) {
       val fieldDecl = recDecl.fMap(namedField.name)
-      if (fieldDecl.refinable) {
-        val (fTy, fEnv) = elabExprAndCheck(namedField.value, envAcc, fieldDecl.tp)
+      val (fTy, fEnv) = elabExpr(namedField.value, envAcc, fieldDecl.tp)
+      if (fieldDecl.refinable)
         refinedFields += (fieldDecl.name -> fTy)
-        envAcc = fEnv
-      } else {
-        envAcc = check.checkExpr(namedField.value, fieldDecl.tp, envAcc)
-      }
+      envAcc = fEnv
     }
 
     if (refinedFields.isEmpty) (recType, envAcc)
     else (RefinedRecordType(recType, refinedFields), envAcc)
   }
 
-  def elabRecordUpdate(rUpdate: RecordUpdate, env: Env): (Type, Env) = {
+  private def elabRecordUpdate(rUpdate: RecordUpdate, env: Env): (Type, Env) = {
     val RecordUpdate(recExpr, recName, fields) = rUpdate
     val recType = RecordType(recName)(module)
-    val recDecl =
-      util.getRecord(module, recName) match {
-        case Some(rd) => rd
-        case None =>
-          diagnosticsInfo.add(UnboundRecord(rUpdate.pos, recName))
-          return (DynamicType, env)
-      }
+    val recDecl = util.getRecord(module, recName)
     checkPrivateConstructor(rUpdate.pos, recDecl)
     var refinedFields: Map[String, Type] = Map.empty
-    var envAcc = Env.empty
+    val (refTy, refEnv) = elabExpr(recExpr, env, recType)
     if (recDecl.refinable) {
-      val (refTy, refEnv) = elabExprAndCheck(recExpr, env, recType)
       val allRefinedFields = recDecl.fields.collect { case f if f.refinable => f.name }.toSet
       val keepFields = allRefinedFields -- fields.map(_.name)
       keepFields.foreach { fieldName =>
         val fieldTy = narrow.getRecordField(recDecl, refTy, fieldName)
         refinedFields += (fieldName -> fieldTy)
       }
-      envAcc = refEnv
-    } else {
-      envAcc = check.checkExpr(recExpr, recType, env)
     }
+    var envAcc = refEnv
     for (field <- fields) {
       val fieldDecl = recDecl.fMap(field.name)
-      if (fieldDecl.refinable) {
-        val (fTy, fEnv) = elabExprAndCheck(field.value, envAcc, fieldDecl.tp)
+      val (fTy, fEnv) = elabExpr(field.value, envAcc, fieldDecl.tp)
+      if (fieldDecl.refinable)
         refinedFields += (fieldDecl.name -> fTy)
-        envAcc = fEnv
-      } else {
-        envAcc = check.checkExpr(field.value, fieldDecl.tp, envAcc)
-      }
+      envAcc = fEnv
     }
     if (refinedFields.isEmpty) (recType, envAcc)
     else (RefinedRecordType(recType, refinedFields), envAcc)
   }
 
-  def elabQualifiers(qualifiers: List[Qualifier], env: Env): Env = {
+  private def elabNativeRecordCreate(rCreate: NativeRecordCreate, env: Env): (Type, Env) = {
+    val NativeRecordCreate(id, fields) = rCreate
+    util.getNativeRecord(id.module, id.name) match {
+      case None =>
+        diagnosticsInfo.add(UnboundNativeRecord(rCreate.pos, id.module, id.name))
+        var envAcc = env
+        for (f <- fields) {
+          val (_, e1) = elabExpr(f.value, envAcc)
+          envAcc = e1
+        }
+        (DynamicType, envAcc)
+      case Some(decl) =>
+        util.checkNativeRecordVisibility(id, decl, rCreate.pos)
+        val providedNames = fields.map(_.name).toSet
+        var envAcc = env
+        for (f <- fields) {
+          decl.fMap.get(f.name) match {
+            case None =>
+              diagnosticsInfo.add(UndefinedNativeRecordField(f.value.pos, id.module, id.name, f.name))
+              val (_, e1) = elabExpr(f.value, envAcc)
+              envAcc = e1
+            case Some(fieldDecl) =>
+              envAcc = elabExpr(f.value, envAcc, fieldDecl.tp)._2
+          }
+        }
+        for (field <- decl.fields if !providedNames.contains(field.name) && field.defaultValue.isEmpty) {
+          diagnosticsInfo.add(MissingRequiredNativeRecordField(rCreate.pos, id.module, id.name, field.name))
+        }
+        (NativeRecordType(id), envAcc)
+    }
+  }
+
+  private def elabNativeRecordSelect(nrSelect: NativeRecordSelect, env: Env): (Type, Env) = {
+    val NativeRecordSelect(recExpr, name, fieldName) = nrSelect
+    name match {
+      case NativeRecordName.Anon =>
+        val (recTy, env1) = elabExpr(recExpr, env)
+        val (concretes, anyDyn) = narrow.asNativeRecordTypes(recTy)
+        if (!subtype.gradualSubType(recTy, AnyNativeRecordType)) {
+          diagnosticsInfo.add(
+            ExpectedSubtype(nrSelect.pos, nrSelect.expr, expected = AnyNativeRecordType, got = recTy)
+          )
+        }
+        if (concretes.isEmpty) {
+          (DynamicType, env1)
+        } else {
+          val resolved = concretes.toList.map(nrt => nrt -> util.getNativeRecord(nrt.id.module, nrt.id.name))
+          resolved.foreach { case (nrt, declOpt) =>
+            declOpt.foreach(decl => util.checkNativeRecordVisibility(nrt.id, decl, nrSelect.pos))
+          }
+          val fieldTys: List[Type] = resolved.flatMap {
+            case (_, None)       => List(DynamicType)
+            case (_, Some(decl)) => decl.fMap.get(fieldName).map(_.tp).toList
+          }
+          val declaredSomewhere = resolved.exists { case (_, declOpt) => declOpt.exists(_.fMap.contains(fieldName)) }
+          if (!declaredSomewhere && !anyDyn)
+            diagnosticsInfo.add(UndefinedAnonNativeRecordField(nrSelect.pos, fieldName))
+          val resultTys = fieldTys ++ (if (anyDyn) List(DynamicType) else Nil)
+          (if (resultTys.isEmpty) DynamicType else subtype.join(resultTys.toSet), env1)
+        }
+      case NativeRecordName.Qualified(id) =>
+        util.getNativeRecord(id.module, id.name) match {
+          case None =>
+            diagnosticsInfo.add(UnboundNativeRecord(nrSelect.pos, id.module, id.name))
+            val (_, env1) = elabExpr(recExpr, env)
+            (DynamicType, env1)
+          case Some(decl) =>
+            util.checkNativeRecordVisibility(id, decl, nrSelect.pos)
+            val (recTy, env1) = elabExpr(recExpr, env)
+            decl.fMap.get(fieldName) match {
+              case None =>
+                diagnosticsInfo.add(
+                  UndefinedNativeRecordField(nrSelect.pos, id.module, id.name, fieldName)
+                )
+                (DynamicType, env1)
+              case Some(fieldDecl) =>
+                nativeRecordFieldType(fieldDecl, recTy, nrSelect, env1)
+            }
+        }
+    }
+  }
+
+  private def nativeRecordFieldType(
+      fieldDecl: NativeRecField,
+      recTy: Type,
+      nrSelect: NativeRecordSelect,
+      env: Env,
+  ): (Type, Env) = {
+    val expected = nrSelect.name match {
+      case NativeRecordName.Qualified(id) => NativeRecordType(id)
+      case NativeRecordName.Anon          => return (DynamicType, env)
+    }
+    if (!subtype.subType(recTy, expected))
+      diagnosticsInfo.add(
+        ExpectedSubtype(nrSelect.pos, nrSelect.expr, expected = expected, got = recTy)
+      )
+    (fieldDecl.tp, env)
+  }
+
+  private def elabNativeRecordUpdate(rUpdate: NativeRecordUpdate, env: Env): (Type, Env) = {
+    val NativeRecordUpdate(recExpr, name, fields) = rUpdate
+    name match {
+      case NativeRecordName.Anon =>
+        val (recTy, env1) = elabExpr(recExpr, env)
+        val (concretes, anyDyn) = narrow.asNativeRecordTypes(recTy)
+        if (!subtype.gradualSubType(recTy, AnyNativeRecordType)) {
+          diagnosticsInfo.add(
+            ExpectedSubtype(rUpdate.pos, rUpdate.expr, expected = AnyNativeRecordType, got = recTy)
+          )
+        }
+        if (concretes.isEmpty) {
+          var envAcc = env1
+          for (f <- fields) {
+            val (_, e1) = elabExpr(f.value, envAcc)
+            envAcc = e1
+          }
+          (DynamicType, envAcc)
+        } else {
+          var envAcc = env1
+          val fieldInferred: List[(String, Type, Expr)] = fields.map { f =>
+            val (ty, e1) = elabExpr(f.value, envAcc)
+            envAcc = e1
+            (f.name, ty, f.value)
+          }
+          val declaredFieldNames: Set[String] =
+            concretes.flatMap(nrt => util.getNativeRecord(nrt.id.module, nrt.id.name).toList.flatMap(_.fMap.keys))
+          if (!anyDyn)
+            for ((fName, _, fExpr) <- fieldInferred if !declaredFieldNames.contains(fName))
+              diagnosticsInfo.add(UndefinedAnonNativeRecordField(fExpr.pos, fName))
+          var resultTys: List[Type] = if (anyDyn) List(DynamicType) else Nil
+          for (nrt <- concretes) {
+            util.getNativeRecord(nrt.id.module, nrt.id.name) match {
+              case None =>
+                resultTys ::= DynamicType
+              case Some(decl) =>
+                util.checkNativeRecordVisibility(nrt.id, decl, rUpdate.pos)
+                var allFieldsPresent = true
+                for ((fName, inferredTy, fExpr) <- fieldInferred) {
+                  decl.fMap.get(fName) match {
+                    case None =>
+                      allFieldsPresent = false
+                    case Some(fieldDecl) =>
+                      val expectedFieldTy = fieldDecl.tp
+                      if (!subtype.subType(inferredTy, expectedFieldTy)) {
+                        diagnosticsInfo.add(
+                          ExpectedSubtype(fExpr.pos, fExpr, expected = expectedFieldTy, got = inferredTy)
+                        )
+                      }
+                  }
+                }
+                if (allFieldsPresent) resultTys ::= nrt
+            }
+          }
+          val res = if (resultTys.isEmpty) DynamicType else subtype.join(resultTys.toSet)
+          (res, envAcc)
+        }
+      case NativeRecordName.Qualified(id) =>
+        util.getNativeRecord(id.module, id.name) match {
+          case None =>
+            diagnosticsInfo.add(UnboundNativeRecord(rUpdate.pos, id.module, id.name))
+            var envAcc = env
+            val (_, e0) = elabExpr(recExpr, envAcc)
+            envAcc = e0
+            for (f <- fields) {
+              val (_, e1) = elabExpr(f.value, envAcc)
+              envAcc = e1
+            }
+            (DynamicType, envAcc)
+          case Some(decl) =>
+            util.checkNativeRecordVisibility(id, decl, rUpdate.pos)
+            val (recTy, env1) = elabExpr(rUpdate.expr, env)
+            val expectedRecTy = NativeRecordType(id)
+            if (!subtype.subType(recTy, expectedRecTy))
+              diagnosticsInfo.add(ExpectedSubtype(rUpdate.pos, rUpdate.expr, expected = expectedRecTy, got = recTy))
+            var envAcc = env1
+            for (f <- rUpdate.fields) {
+              decl.fMap.get(f.name) match {
+                case None =>
+                  diagnosticsInfo.add(UndefinedNativeRecordField(f.value.pos, id.module, id.name, f.name))
+                  val (_, e1) = elabExpr(f.value, envAcc)
+                  envAcc = e1
+                case Some(fieldDecl) =>
+                  envAcc = elabExpr(f.value, envAcc, fieldDecl.tp)._2
+              }
+            }
+            (NativeRecordType(id), envAcc)
+        }
+    }
+  }
+  private def elabQualifiers(qualifiers: List[Qualifier], env: Env): Env = {
     var envAcc = env
     qualifiers.foreach {
       case LGenerate(gPat, gExpr) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, envAcc, ListType(AnyType))
+        val (gT, gEnv) = elabExpr(gExpr, envAcc, ListType(AnyType))
         val Some(ListType(gElemT)) = narrow.asListType(gT): @unchecked
         val (_, pEnv) = elabPat.elabPat(gPat, gElemT, gEnv)
         envAcc = pEnv
       case LGenerateStrict(gPat, gExpr) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, envAcc, ListType(AnyType))
+        val (gT, gEnv) = elabExpr(gExpr, envAcc, ListType(AnyType))
         val Some(ListType(gElemT)) = narrow.asListType(gT): @unchecked
         val (_, pEnv) = elabPat.elabPat(gPat, gElemT, gEnv)
         envAcc = pEnv
       case BGenerate(gPat, gExpr) =>
-        envAcc = check.checkExpr(gExpr, BinaryType, envAcc)
+        envAcc = elabExpr(gExpr, envAcc, BinaryType)._2
         val (_, pEnv) = elabPat.elabPat(gPat, BinaryType, envAcc)
         envAcc = pEnv
       case BGenerateStrict(gPat, gExpr) =>
-        envAcc = check.checkExpr(gExpr, BinaryType, envAcc)
+        envAcc = elabExpr(gExpr, envAcc, BinaryType)._2
         val (_, pEnv) = elabPat.elabPat(gPat, BinaryType, envAcc)
         envAcc = pEnv
       case MGenerate(gkPat, gvPat, gExpr) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, envAcc, mapOrIterTy)
+        val (gT, gEnv) = elabExpr(gExpr, envAcc, mapOrIterTy)
         val mapT = narrow.asMapOrIterTypes(gT)
         val kT = subtype.join(mapT.map(narrow.getKeyType))
         val vT = subtype.join(mapT.map(narrow.getValType))
@@ -735,7 +1028,7 @@ final class Elab(pipelineContext: PipelineContext) {
         val (_, vPatEnv) = elabPat.elabPat(gvPat, vT, kPatEnv)
         envAcc = vPatEnv
       case MGenerateStrict(gkPat, gvPat, gExpr) =>
-        val (gT, gEnv) = elabExprAndCheck(gExpr, envAcc, mapOrIterTy)
+        val (gT, gEnv) = elabExpr(gExpr, envAcc, mapOrIterTy)
         val mapT = narrow.asMapOrIterTypes(gT)
         val kT = subtype.join(mapT.map(narrow.getKeyType))
         val vT = subtype.join(mapT.map(narrow.getValType))
@@ -749,12 +1042,12 @@ final class Elab(pipelineContext: PipelineContext) {
         envAcc = elabExpr(m, envAcc)._2
         val fExpr = BinOp(op, Var(v)(pv.pos), exp2)(binOp.pos)
         Filters.asTest(fExpr).foreach { test =>
-          envAcc = elabGuard.elabGuards(List(Guard(List(test))), envAcc)
+          envAcc = occurrence.testEnv(test, envAcc, result = true)
         }
         envAcc = elabExpr(fExpr, envAcc)._2
       case Filter(fExpr) =>
         Filters.asTest(fExpr).foreach { test =>
-          envAcc = elabGuard.elabGuards(List(Guard(List(test))), envAcc)
+          envAcc = occurrence.testEnv(test, envAcc, result = true)
         }
         envAcc = elabExpr(fExpr, envAcc)._2
     }

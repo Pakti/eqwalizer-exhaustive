@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.io
@@ -101,6 +105,32 @@ object Ipc {
         throw Terminated
       case Left(GotNull()) =>
         Console.err.println(s"eqWAlizer [getRecDecl] GotNull for module '$module', id '$id'")
+        throw Terminated
+  }
+
+  def getNativeRecDecl(module: String, id: String): Option[Array[Byte]] = {
+    send(Request.GetNativeRecDecl(module, id))
+    receive() match
+      case Right(Reply.GetNativeRecDeclReply(len)) =>
+        if (len == 0) {
+          println()
+          Console.out.flush()
+          None
+        } else {
+          println()
+          Console.out.flush()
+          val buf = new Array[Byte](len)
+          val read = readNBytes(System.in, buf, 0, len)
+          assert(read == len, s"expected $len but got $read")
+          Some(buf)
+        }
+      case Right(Reply.CannotCompleteRequest) =>
+        throw Terminated
+      case Right(reply) =>
+        Console.err.println(s"eqWAlizer [getNativeRecDecl] received bad reply from ELP $reply")
+        throw Terminated
+      case Left(GotNull()) =>
+        Console.err.println(s"eqWAlizer [getNativeRecDecl] GotNull for module '$module', id '$id'")
         throw Terminated
   }
 
@@ -327,6 +357,7 @@ object Ipc {
     case ValidateType(ty: ExtType)
     case GetTypeDecl(module: String, id: Id)
     case GetRecDecl(module: String, id: String)
+    case GetNativeRecDecl(module: String, id: String)
     case GetFunSpec(module: String, id: Id)
     case GetOverloadedFunSpec(module: String, id: Id)
     case GetCallbacks(module: String)
@@ -347,6 +378,7 @@ object Ipc {
     case InvalidType(len: Int)
     case GetTypeDeclReply(len: Int)
     case GetRecDeclReply(len: Int)
+    case GetNativeRecDeclReply(len: Int)
     case GetFunSpecReply(len: Int)
     case GetOverloadedFunSpecReply(len: Int)
     case GetCallbacksReply(len: Int)

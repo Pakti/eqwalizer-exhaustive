@@ -1,12 +1,16 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
 
-import com.whatsapp.eqwalizer.ast.Exprs.{Clause, Expr, ExtType}
+import com.whatsapp.eqwalizer.ast.Exprs.{Clause, Expr}
 import com.whatsapp.eqwalizer.ast.Types._
 import com.github.plokhotnyuk.jsoniter_scala.macros._
 import com.github.plokhotnyuk.jsoniter_scala.core._
@@ -17,10 +21,6 @@ object Forms {
   sealed trait InternalForm { val pos: Pos }
 
   case class Module(name: String)(val pos: Pos) extends InternalForm
-  case class CompileExportAll()(val pos: Pos) extends InternalForm
-  case class Export(funs: List[Id])(val pos: Pos) extends InternalForm
-  case class Import(module: String, funs: List[Id])(val pos: Pos) extends InternalForm
-  case class ExportType(types: List[Id])(val pos: Pos) extends InternalForm
   case class FunDecl(id: Id, clauses: List[Clause])(val pos: Pos) extends InternalForm
   case class File(file: String, start: Int)(val pos: Pos) extends InternalForm
   case class Fixme(comment: Pos.TextRange, suppression: Pos.TextRange, isIgnore: Boolean)
@@ -28,14 +28,6 @@ object Forms {
   case class Behaviour(name: String)(val pos: Pos) extends InternalForm
   case class EqwalizerNowarnFunction(id: Id)(val pos: Pos) extends InternalForm
   case class EqwalizerUnlimitedRefinement(id: Id)(val pos: Pos) extends InternalForm
-  case class EqwalizerPrivateConstructor(name: String, owner: Option[String] = None)(val pos: Pos) extends InternalForm
-  case class TypingAttribute(names: List[String])(val pos: Pos) extends InternalForm
-  case class ExternalTypeDecl(id: Id, params: List[String], body: ExtType)(val pos: Pos) extends InternalForm
-  case class ExternalFunSpec(id: Id, types: List[ExtType])(val pos: Pos) extends InternalForm
-  case class ExternalCallback(id: Id, types: List[ExtType])(val pos: Pos) extends InternalForm
-  case class ExternalOptionalCallbacks(ids: List[Id])(val pos: Pos) extends InternalForm
-  case class ExternalRecDecl(name: String, fields: List[ExternalRecField])(val pos: Pos) extends InternalForm
-  case class ExternalRecField(name: String, tp: Option[ExtType], defaultValue: Option[Expr])
 
   case class FunSpec(id: Id, ty: FunType)
   case class OverloadedFunSpec(id: Id, tys: List[FunType])
@@ -45,7 +37,16 @@ object Forms {
     lazy val fMap: Map[String, RecField] = fields.map(f => f.name -> f).toMap
   }
   case class RecField(name: String, tp: Type, defaultValue: Option[Expr], refinable: Boolean)
-  case class TypeDecl(id: Id, params: List[VarType], body: Type)
+
+  case class NativeRecDecl(
+      name: String,
+      fields: List[NativeRecField],
+      exported: Boolean,
+  ) {
+    lazy val fMap: Map[String, NativeRecField] = fields.map(f => f.name -> f).toMap
+  }
+  case class NativeRecField(name: String, tp: Type, defaultValue: Option[Expr])
+  case class TypeDecl(id: Id, params: List[FreeVarType], body: Type)
 
   def load(module: String): List[InternalForm] = {
     val bytes = Ipc.getAstBytes(module, Ipc.ASTFormat.ConvertedForms).get

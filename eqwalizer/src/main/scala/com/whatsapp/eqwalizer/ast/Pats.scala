@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -21,11 +25,15 @@ object Pats {
   case class PatCons(h: Pat, t: Pat)(val pos: Pos) extends Pat
 
   case class PatInt()(val pos: Pos) extends Pat
-  case class PatNumber()(val pos: Pos) extends Pat
+  case class PatFloat()(val pos: Pos) extends Pat
   case class PatAtom(s: String)(val pos: Pos) extends Pat
   case class PatVar(n: String)(val pos: Pos) extends Pat
   case class PatRecord(recName: String, fields: List[PatRecordFieldNamed], gen: Option[Pat])(val pos: Pos) extends Pat
   case class PatRecordIndex(recName: String, fieldName: String)(val pos: Pos) extends Pat
+
+  case class PatNativeRecord(name: Exprs.NativeRecordName, fields: List[PatNativeRecordFieldNamed])(val pos: Pos)
+      extends Pat
+  case class PatNativeRecordFieldNamed(name: String, pat: Pat)
 
   case class PatUnOp(op: String, arg: Pat)(val pos: Pos) extends Pat
   case class PatBinOp(op: String, arg1: Pat, arg2: Pat)(val pos: Pos) extends Pat

@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer
@@ -33,8 +37,6 @@ package object tc {
     val checkCallback: CheckCallback = new CheckCallback(this)
     val typeMismatch: TypeMismatch = new TypeMismatch(this)
     val instantiate: TypeVars.Instantiate = new TypeVars.Instantiate()
-    val check: Check =
-      new Check(this)
     val elab: Elab =
       new Elab(this)
     val elabApply: ElabApply =
@@ -43,8 +45,6 @@ package object tc {
       new ElabApplyCustom(this)
     val elabApplyOverloaded: ElabApplyOverloaded =
       new ElabApplyOverloaded(this)
-    val elabGuard: ElabGuard =
-      new ElabGuard(this)
     val elabPat: ElabPat =
       new ElabPat(this)
     val occurrence: Occurrence =
@@ -63,7 +63,6 @@ package object tc {
     val diagnosticsInfo: DiagnosticsInfo =
       new DiagnosticsInfo()
     val overloadedSpecDynamicResult: Boolean = config.overloadedSpecDynamicResult
-    val customMapsMerge: Boolean = config.customMapsMerge
     val reportDynamicLambdas: Boolean = config.reportDynamicLambdas
   }
 }

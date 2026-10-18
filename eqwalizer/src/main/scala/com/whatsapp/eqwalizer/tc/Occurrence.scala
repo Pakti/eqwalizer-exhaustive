@@ -1,88 +1,85 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
 
-import com.whatsapp.eqwalizer.ast.Guards._
-import com.whatsapp.eqwalizer.ast.Exprs._
-import com.whatsapp.eqwalizer.ast.{Id, Types}
-import com.whatsapp.eqwalizer.ast.Pats._
-import com.whatsapp.eqwalizer.ast.Types._
+import com.whatsapp.eqwalizer.ast.Guards.*
+import com.whatsapp.eqwalizer.ast.Exprs.*
+import com.whatsapp.eqwalizer.ast.{Id, RemoteId, Types}
+import com.whatsapp.eqwalizer.ast.Pats.*
+import com.whatsapp.eqwalizer.ast.Types.*
+import com.whatsapp.eqwalizer.ast.stub.Db
+import com.whatsapp.eqwalizer.tc
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ListBuffer
-import scala.util.boundary
 
 object Occurrence {
-  private sealed trait Prop
-  private case object Unknown extends Prop
-  private case object True extends Prop
-  private case object False extends Prop
-  private case class Pos(obj: Obj, t: Type) extends Prop
-  private case class Neg(obj: Obj, t: Type) extends Prop
-  private case class And(props: List[Prop]) extends Prop
-  private case class Or(props: List[Prop]) extends Prop
+  // Atomic Proposition
+  type AProp = Pos | Neg
+
+  // Semantics of a guard test. At runtime there are four outcomes: it
+  // evaluates to `true`, to `false`, to another (non-boolean) value, or it
+  // throws. TP partitions them into three cells - `false` and "other value"
+  // are merged into ff, since a guard treats both as "did not pass":
+  //   tt   - holds when the test evaluates to `true`
+  //   ff   - holds when the test evaluates, without throwing, to anything
+  //          other than `true` (`false` or a non-boolean value)
+  //   ev   - holds whenever the test evaluates without throwing, whatever
+  //          the result: `X + Y > 0` having evaluated implies X, Y :: number()
+  //   th   - holds when evaluation throws: the test's throw-domain
+  //          (`hd(L)` threw implies L is [] or not a list). False means the
+  //          test is total; Unknown means the throw-cause is inexpressible.
+  //   resT - the result type of the test in EVERY env. Currently, we exploit
+  //          boolean resT for handling connections.
+  // Invariant: tt and ff each conjoin ev.
+  private case class TP(tt: Prop, ff: Prop, ev: Prop, th: Prop, resT: Option[Type]) {
+    // Knowledge available when a clause was skipped over this test: it
+    // evaluated to non-`true` or it threw. An inexpressible throw-domain
+    // (th = Unknown) absorbs the disjunction - no negative information.
+    def notTaken: Prop = or(List(ff, th))
+  }
+
+  private def flattenAnd(p: Prop): List[SProp | Or] = p match {
+    case And(l)          => l.flatMap(flattenAnd)
+    case True | Unknown  => List()
+    case p: (SProp | Or) => List(p)
+  }
 
   /** Prefer these functions to And.apply and Or.apply */
-  private def and(props: List[Prop]): Prop =
+  private def and(props0: List[Prop]): Prop = {
+    val props = props0.flatMap(flattenAnd).distinct
     if (props.isEmpty) True
     else if (props.contains(False)) False
-    else {
-      val flattenedProps = props.flatMap {
-        case And(l) => l
-        case True   => List()
-        case p      => List(p)
-      }
-      val (propsUkn, propsNotUkn) = flattenedProps.partition(_ == Unknown)
-      val simplProps =
-        if (propsUkn.isEmpty) propsNotUkn
-        else Unknown :: propsNotUkn
-      if (simplProps.isEmpty) True
-      else if (simplProps.size == 1) simplProps.head
-      else And(simplProps)
-    }
+    else if (props.size == 1) props.head
+    else And(props)
+  }
 
-  private def or(props: List[Prop]): Prop =
+  private def flattenOr(p: Prop): List[SProp | And] = p match {
+    case Or(l)            => l.flatMap(flattenOr)
+    case False            => List()
+    case p: (SProp | And) => List(p)
+  }
+
+  private def or(props0: List[Prop]): Prop = {
+    val props = props0.flatMap(flattenOr).distinct
     if (props.isEmpty) False
     else if (props.contains(True)) True
-    else {
-      val flattenedProps = props.flatMap {
-        case Or(l) => l
-        case False => List()
-        case p     => List(p)
-      }
-      val (propsUkn, propsNotUkn) = flattenedProps.partition(_ == Unknown)
-      val simplProps =
-        if (propsUkn.isEmpty) propsNotUkn
-        else Unknown :: propsNotUkn
-      if (simplProps.isEmpty) False
-      else if (simplProps.size == 1) simplProps.head
-      else Or(simplProps)
-    }
-
-  private sealed trait Obj
-  private case class VarObj(v: String) extends Obj
-  private case class FieldObj(field: Field, obj: Obj) extends Obj
-
-  private sealed trait Field
-  private case class TupleField(index: Int, arity: Option[Int]) extends Field
-  private case class RecordField(field: String, recName: String) extends Field
-  private case class MapField(field: Key) extends Field
-  private case object ListHead extends Field
-  private case object ListTail extends Field
-
-  private type PropEnv = List[Prop]
-  private type AMap = Map[String, Obj]
-
-  private implicit class MaybeOps(maybe: Option[Boolean]) {
-    @inline
-    def isTrue: Boolean = maybe.contains(true)
-    @inline
-    def isFalse: Boolean = maybe.contains(false)
+    // an uninformative disjunct makes the whole disjunction uninformative:
+    // resolution keeps the unrefined env alive and joins back to it
+    else if (props.contains(Unknown)) Unknown
+    else if (props.size == 1) props.head
+    else Or(props)
   }
+
+  private type AMap = Map[String, Obj]
 
   private sealed trait Polarity
   private case object + extends Polarity
@@ -94,47 +91,19 @@ object Occurrence {
       "is_atom" -> AtomType,
       "is_binary" -> BinaryType,
       "is_bitstring" -> BinaryType,
-      "is_boolean" -> UnionType(Set(falseType, trueType)),
-      "is_float" -> floatType,
+      "is_boolean" -> booleanType,
+      "is_float" -> FloatType,
       "is_function" -> AnyFunType,
-      "is_integer" -> NumberType,
+      "is_integer" -> IntegerType,
       "is_list" -> ListType(AnyType),
-      "is_number" -> NumberType,
+      "is_number" -> numberType,
       "is_pid" -> PidType,
       "is_port" -> PortType,
       "is_reference" -> ReferenceType,
       "is_map" -> MapType(Map(), AnyType, AnyType),
       "is_tuple" -> AnyTupleType,
+      "is_record" -> AnyNativeRecordType,
     )
-
-  private enum ValueKind {
-    case Atom, Binary, Fun, List, Map, Number, Pid, Port, Reference, Tuple
-  }
-
-  private def kind(t: Type): Option[ValueKind] = t match {
-    case AtomLitType(_) | AtomType =>
-      Some(ValueKind.Atom)
-    case BinaryType =>
-      Some(ValueKind.Binary)
-    case AnyFunType | FunType(_, _, _) | AnyArityFunType(_) =>
-      Some(ValueKind.Fun)
-    case NilType | ListType(_) =>
-      Some(ValueKind.List)
-    case MapType(_, _, _) =>
-      Some(ValueKind.Map)
-    case NumberType =>
-      Some(ValueKind.Number)
-    case PidType =>
-      Some(ValueKind.Pid)
-    case PortType =>
-      Some(ValueKind.Port)
-    case ReferenceType =>
-      Some(ValueKind.Reference)
-    case AnyTupleType | TupleType(_) | RecordType(_) | RefinedRecordType(_, _) =>
-      Some(ValueKind.Tuple)
-    case _ =>
-      None
-  }
 }
 
 // The main logic of occurrence typing.
@@ -145,6 +114,7 @@ final class Occurrence(pipelineContext: PipelineContext) {
   private lazy val narrow = pipelineContext.narrow
   private lazy val util = pipelineContext.util
   private lazy val vars = pipelineContext.vars
+  private lazy val typeInfo = pipelineContext.typeInfo
   private type Name = String
   private var gen = 0
   private def genVar(): String = {
@@ -157,24 +127,6 @@ final class Occurrence(pipelineContext: PipelineContext) {
     val shortGuards = clauses.forall(clause => clause.guards.map(guardSize).sum < 32)
     val smallClauses = pipelineContext.unlimitedRefinement || (clauses.size < 7 && shortGuards)
     (module != "erl_syntax") && (emptyPatterns || smallClauses)
-  }
-
-  private def ignoreNumberRefinement(clause: Clause, aMap: AMap, nextClauses: List[(Clause, AMap)]): Boolean = {
-    clause match {
-      case Clause(_, List(Guard(List(TestCall(Id("is_integer", 1), List(TestVar(v1)))))), _) =>
-        nextClauses.exists {
-          case (Clause(_, List(Guard(List(TestCall(Id("is_float", 1), List(TestVar(v2)))))), _), aMap2) =>
-            aMap.getOrElse(v1, VarObj(v1)) == aMap2.getOrElse(v2, VarObj(v2))
-          case _ => false
-        }
-      case Clause(_, List(Guard(List(TestCall(Id("is_float", 1), List(TestVar(v1)))))), _) =>
-        nextClauses.exists {
-          case (Clause(_, List(Guard(List(TestCall(Id("is_integer", 1), List(TestVar(v2)))))), _), aMap2) =>
-            aMap.getOrElse(v1, VarObj(v1)) == aMap2.getOrElse(v2, VarObj(v2))
-          case _ => false
-        }
-      case _ => false
-    }
   }
 
   private def linearVars(clause: Clause): Boolean = {
@@ -204,10 +156,10 @@ final class Occurrence(pipelineContext: PipelineContext) {
       case PatVar(_) => false
       case _         => true
     }
-    if (!hasComplexPattern)
+    if (!hasComplexPattern && clause.guards.isEmpty)
       return true
     val env = clausesEnvs(List(clause), argTys, Map()).head
-    !env.exists { case (_, ty) => subtype.isNoneType(ty) }
+    !env.exists { case (_, ty) => Subtype.isNoneType(ty) }
   }
 
   // These are specialized methods to upgrade environments/context
@@ -217,22 +169,16 @@ final class Occurrence(pipelineContext: PipelineContext) {
     val clauseEnvs = ListBuffer.empty[Env]
     val accumulateNegProps = isEnabled(i.clauses)
     for (clause <- i.clauses) {
-      if (linearVars(clause)) {
-        val aMap = Map.empty[Name, Obj]
-        val (testPos, testNeg) = guardsProps(clause.guards, aMap)
-        val clauseProps =
-          if (accumulateNegProps) combine(testPos.toList, propsAcc)
-          else testPos.toList
-        val clauseEnv = batchSelect(env, clauseProps, aMap)
-        clauseEnvs.addOne(clauseEnv)
-        if (accumulateNegProps) {
-          propsAcc = testNeg match {
-            case None          => propsAcc
-            case Some(propNeg) => propsAcc :+ propNeg
-          }
-        }
-      } else {
-        clauseEnvs.addOne(env)
+      val aMap = Map.empty[Name, Obj]
+      val (testPos, testNeg) = guardsProps(clause.guards, aMap)
+      val localClauseProps = testPos.toList
+      val clauseProps =
+        if (accumulateNegProps) combine(localClauseProps, propsAcc)
+        else localClauseProps
+      val clauseEnv = batchSelect(env, clauseProps, aMap)
+      clauseEnvs.addOne(clauseEnv)
+      if (accumulateNegProps) {
+        propsAcc = propsAcc :+ or(testNeg.toList)
       }
     }
     clauseEnvs.toList
@@ -260,29 +206,24 @@ final class Occurrence(pipelineContext: PipelineContext) {
     var propsAcc = List.empty[Prop]
     val clauseEnvs = ListBuffer.empty[Env]
     for (clause <- c.clauses) {
-      if (linearVars(clause)) {
-        val pat = clause.pats.head
-        val (patPos, patNeg) =
-          pat match {
-            case PatVar(`x`) => (None, None)
-            case _           => patProps(x, Nil, pat, env).unzip
-          }
-        val aMap = aliases(x, Nil, pat, env).toMap
-        val (testPos, testNeg) = guardsProps(clause.guards, aMap)
-        val clauseProps =
-          if (accumulateNegProps) combine(patPos.toList ++ testPos, propsAcc)
-          else patPos.toList ++ testPos
-        val clauseEnv = batchSelect(env1, clauseProps, aMap ++ eMap)
-        clauseEnvs.addOne(clauseEnv)
-        if (accumulateNegProps) {
-          propsAcc = patNeg.toList ++ testNeg match {
-            case Nil            => propsAcc
-            case propNeg :: Nil => propsAcc :+ propNeg
-            case propsNeg       => propsAcc :+ or(propsNeg)
-          }
+      val pat = clause.pats.head
+      val info = patProps(x, Nil, pat, env)
+      val (patPos, patNeg) =
+        pat match {
+          case PatVar(`x`) => (None, None)
+          case _           => info.props.unzip
         }
-      } else {
-        clauseEnvs.addOne(env)
+      val aMap = info.aliases.toMap
+      val (testPos, testNeg) = guardsProps(clause.guards, aMap)
+      val localClauseProps = patPos.toList ++ testPos
+      val clauseProps =
+        if (accumulateNegProps) combine(localClauseProps, propsAcc)
+        else localClauseProps
+      val clauseEnv = batchSelect(bindSeeds(env1, info.seeds), clauseProps, aMap ++ eMap)
+      clauseEnvs.addOne(clauseEnv)
+      if (accumulateNegProps && linearVars(clause)) {
+        val clauseNeg = patNeg.toList ++ testNeg
+        propsAcc = propsAcc :+ or(clauseNeg)
       }
     }
     clauseEnvs.toList
@@ -296,124 +237,153 @@ final class Occurrence(pipelineContext: PipelineContext) {
     val vars = argTys.map(_ => genVar())
     val env1 = env ++ vars.zip(argTys).toMap
 
-    var clausesWithAliases = clauses.map { clause =>
+    for (clause <- clauses) {
+      val pats = clause.pats
+      val patsPos = ListBuffer.empty[Prop]
+      val patsNeg = ListBuffer.empty[Prop]
       var aMap: AMap = Map.empty
-      for ((x, pat) <- vars.zip(clause.pats)) {
-        aMap = aMap ++ aliases(x, Nil, pat, env).toMap
+      val seeds = ListBuffer.empty[(Name, Obj)]
+      for ((x, pat) <- vars.zip(pats)) {
+        val info = patProps(x, Nil, pat, env)
+        val (patPos, patNeg) = info.props.unzip
+        patPos.foreach(patsPos.addOne)
+        patNeg.foreach(patsNeg.addOne)
+        aMap = aMap ++ info.aliases
+        seeds.addAll(info.seeds)
       }
-      (clause, aMap)
-    }
-    while (clausesWithAliases.nonEmpty) {
-      val (clause, aMap) = clausesWithAliases.head
-      clausesWithAliases = clausesWithAliases.tail
-      if (linearVars(clause)) {
-        val pats = clause.pats
-        val allPos = ListBuffer.empty[Prop]
-        val allNeg = ListBuffer.empty[Prop]
-        for ((x, pat) <- vars.zip(pats)) {
-          val (patPos, patNeg) = patProps(x, Nil, pat, env).unzip
-          patPos.foreach(allPos.addOne)
-          patNeg.foreach(allNeg.addOne)
-        }
-        val (testPos, testNeg) = guardsProps(clause.guards, aMap)
-        val clauseProps =
-          if (accumulateNegProps) combine((allPos ++ testPos).toList, propsAcc)
-          else (allPos ++ testPos).toList
-        val clauseEnv = batchSelect(env1, clauseProps, aMap)
-        clauseEnvs.addOne(clauseEnv)
-        if (accumulateNegProps) {
-          propsAcc = {
-            val allNeg1 =
-              if (!ignoreNumberRefinement(clause, aMap, clausesWithAliases)) allNeg.toList ++ testNeg
-              else allNeg.toList
-            allNeg1 match {
-              case Nil            => propsAcc
-              case propNeg :: Nil => propsAcc :+ propNeg
-              case propsNeg       => propsAcc :+ or(propsNeg)
-            }
-          }
-        }
-      } else {
-        clauseEnvs.addOne(env)
+      val (testPos, testNeg) = guardsProps(clause.guards, aMap)
+      val localClauseProps = (patsPos ++ testPos).toList
+      val clauseProps =
+        if (accumulateNegProps) combine(localClauseProps, propsAcc)
+        else localClauseProps
+      val clauseEnv = batchSelect(bindSeeds(env1, seeds.toList), clauseProps, aMap)
+      clauseEnvs.addOne(clauseEnv)
+      if (accumulateNegProps && linearVars(clause)) {
+        val clauseNeg = (patsNeg ++ testNeg).toList
+        propsAcc = propsAcc :+ or(clauseNeg)
       }
     }
     clauseEnvs.toList
   }
 
+  // Refine an env knowing that `test` was evaluated - in expression position,
+  // so a throw would have propagated - and produced `result`. `result = false`
+  // therefore implies the test evaluated to boolean `false` (stronger than a
+  // guard clause being skipped, which could also mean the test threw).
   def testEnv(test: Test, env: Env, result: Boolean): Env = {
-    val (testPos, testNeg) = testProps(test, Map.empty)
-    val relevantProp = if (result) testPos else testNeg
+    val tp = testProps(test, Map.empty)
+    val relevantProp = if (result) tp.tt else bff(test, tp, Map.empty)
     batchSelect(env, List(relevantProp), Map.empty)
   }
 
-  /** Combines the propositions from `posProps` and `props` into a single list,
-    * taking the positive statements from `posProps` to filter out redundant
-    * negative statements from `props`.
-    */
-  private def combine(posProps: List[Prop], props: List[Prop]): List[Prop] = {
-    def collectPos(p: Prop): List[(Obj, Type)] = {
-      p match {
-        case Pos(obj, t) => List((obj, t))
-        case And(ps)     => ps.flatMap(collectPos)
-        case _           => List()
-      }
+  // Refine an env knowing that `test` was evaluated - in a position where a
+  // throw would have propagated - to a value of type `ty` (e.g. a non-literal
+  // map-pattern key evaluates to a key of the map's key type).
+  def valueEnv(test: Test, ty: Type, env: Env): Env =
+    batchSelect(env, List(evIn(test, ty, Map.empty)), Map.empty)
+
+  // Refine an env by a clause's guards, refining variables by name (empty aMap).
+  // Called both before elabPats (pattern vars are pre-bound by enterScope, so
+  // guard refinements feed pattern elaboration) and after (so leaves keep their
+  // post-pattern types); this is the occurrence-based replacement for ElabGuard
+  // and covers leaves that dispatch-time env refinement cannot reach (e.g.
+  // values bound under a non-literal map key).
+  def refineGuards(guards: List[Guard], env: Env): Env =
+    if (guards.isEmpty) env
+    else batchSelect(env, guardsProps(guards, Map.empty)._1.toList, Map.empty)
+
+  def annotateGuards(guards: List[Guard], env: Env): Unit =
+    guards.foreach(annotateGuard(_, env))
+
+  private def annotateGuard(guard: Guard, env: Env): Unit =
+    guard.tests.foreach(annotateTest(_, env))
+
+  private def annotateTest(test: Test, env: Env): Unit =
+    test match {
+      case TestVar(v) =>
+        typeInfo.add(test.pos, env(v))
+      case TestTuple(elems) =>
+        elems.foreach(annotateTest(_, env))
+      case TestCons(h, t) =>
+        annotateTest(h, env)
+        annotateTest(t, env)
+      case TestCall(id, args) =>
+        args.foreach(annotateTest(_, env))
+      case TestRecordCreate(recName, fields) =>
+        fields.foreach(f => annotateTest(f.value, env))
+      case TestRecordSelect(rec, recName, fieldName) =>
+        annotateTest(rec, env)
+      case TestNativeRecordSelect(rec, name, fieldName) =>
+        annotateTest(rec, env)
+      case TestMapCreate(kvs) =>
+        kvs.foreach { kv =>
+          annotateTest(kv._1, env)
+          annotateTest(kv._2, env)
+        }
+      case TestMapUpdate(map, kvs) =>
+        annotateTest(map, env)
+        kvs.foreach { kv =>
+          annotateTest(kv._1, env)
+          annotateTest(kv._2, env)
+        }
+      case TestUnOp(op, arg) =>
+        annotateTest(arg, env)
+      case TestBinOp(op, arg1, arg2) =>
+        annotateTest(arg1, env)
+        annotateTest(arg2, env)
+      case TestNil() | TestString() | TestRecordIndex(_, _) | TestAtom(_) | TestInteger(_) | TestFloat() |
+          TestBinaryLit() =>
+        ()
     }
-    val posTypes: List[(Obj, Type)] = posProps.flatMap(collectPos)
-    def isRedundant(p: Prop): Boolean = {
-      p match {
-        case Neg(obj, t) =>
-          posTypes.exists { case (obj2, t2) => obj == obj2 && overlap(t, t2).contains(false) }
-        case Or(ps) =>
-          ps.exists(isRedundant)
-        case _ =>
-          false
-      }
+
+  private def collectAtomic(p: Prop): List[AProp] =
+    p match {
+      case aProp: AProp => List(aProp)
+      case And(ps)      => ps.flatMap(collectAtomic)
+      case _            => List()
     }
-    props.filter(!isRedundant(_)) ++ posProps
+
+  private def implies(p: AProp, q: AProp): Boolean = (p, q) match {
+    case (Pos(o1, t1), Pos(o2, t2)) if o1 == o2 => subtype.gradualSubType(t1, t2)
+    case (Neg(o1, t1), Neg(o2, t2)) if o1 == o2 => subtype.gradualSubType(t2, t1)
+    case (Pos(o1, t1), Neg(o2, t2)) if o1 == o2 => !subtype.mayOverlap(t1, t2)
+    case _                                      => false
   }
 
-  private def aliases(x: String, path: Path, pat: Pat, env: Env): List[(Name, Obj)] =
-    pat match {
-      case PatVar(v) if !env.contains(v) =>
-        val obj = mkObj(x, path)
-        List(v -> obj)
-      case PatTuple(elems) =>
-        val arity = elems.size
-        elems.zipWithIndex.flatMap { case (elem, i) =>
-          val pathI = path ++ List(TupleField(i, Some(arity)))
-          aliases(x, pathI, elem, env)
-        }
-      case PatRecord(recName, fields, gen) =>
-        val fieldsAliases =
-          fields.flatMap(field => aliases(x, path ++ List(RecordField(field.name, recName)), field.pat, env))
-        gen match {
-          case None => fieldsAliases
-          case Some(genPat) =>
-            val recDecl = util.getRecord(module, recName)
-            recDecl match {
-              case None => fieldsAliases
-              case Some(recDecl) =>
-                val genAliases =
-                  recDecl.fields
-                    .filter(fDecl => !fields.exists(f => f.name == fDecl._1))
-                    .flatMap(fDecl => aliases(x, path ++ List(RecordField(fDecl._1, recName)), genPat, env))
-                genAliases ++ fieldsAliases
-            }
-        }
-      case PatMatch(pat1, pat2) =>
-        aliases(x, path, pat1, env) ++ aliases(x, path, pat2, env)
-      case PatMap(pats) =>
-        pats.flatMap { case (patKey, patR) =>
-          Key.fromTest(patKey).map { key =>
-            val pathI = path ++ List(MapField(key))
-            aliases(x, pathI, patR, env)
-          }
-        }.flatten
-      case PatCons(hpat, tpat) =>
-        aliases(x, path ++ List(ListHead), hpat, env) ++ aliases(x, path ++ List(ListTail), tpat, env)
-      case _ =>
-        Nil
-    }
+  private def contradicts(p: AProp, q: AProp): Boolean = (p, q) match {
+    case (Pos(o1, t1), Neg(o2, t2)) if o1 == o2 => subtype.gradualSubType(t1, t2)
+    case (Neg(o1, t1), Pos(o2, t2)) if o1 == o2 => subtype.gradualSubType(t2, t1)
+    case (Pos(o1, t1), Pos(o2, t2)) if o1 == o2 => !subtype.mayOverlap(t1, t2)
+    case _                                      => false
+  }
+
+  // Combines the propositions from `props` and `acc` into a single list,
+  // the propositions in `acc` are simplified wrt atomic propositions in `props`.
+  private def combine(props: List[Prop], acc: List[Prop]): List[Prop] = {
+    val atomicProps: List[AProp] = props.flatMap(collectAtomic)
+    def isImplied(p: AProp): Boolean =
+      atomicProps.exists(implies(_, p))
+    def isContra(p: AProp): Boolean =
+      atomicProps.exists(contradicts(_, p))
+    def reduceImplied(p: Prop): Prop =
+      p match {
+        case Or(ps)                   => or(ps.map(reduceImplied))
+        case And(ps)                  => and(ps.map(reduceImplied))
+        case a: AProp if isImplied(a) => True
+        case p                        => p
+      }
+    def reduceContras(p: Prop): Prop =
+      p match {
+        case Or(ps)                  => or(ps.map(reduceContras))
+        case And(ps)                 => and(ps.map(reduceContras))
+        case a: AProp if isContra(a) => False
+        case p                       => p
+      }
+    val acc1 = acc.map(reduceImplied)
+    val acc2 = acc1.map(reduceContras)
+    if (acc2.contains(False)) List(False)
+    else props ++ acc2
+  }
 
   private def guardsProps(guards: List[Guard], aMap: Map[Name, Obj]): (Option[Prop], Option[Prop]) =
     // the same as connecting via OR
@@ -424,9 +394,9 @@ final class Occurrence(pipelineContext: PipelineContext) {
     }
 
   private def guardProp(guard: Guard, aMap: Map[Name, Obj]): (Prop, Prop) = {
-    // the same as connecting via AND
-    val (pos, neg) = guard.tests.map(testProps(_, aMap)).unzip
-    (and(pos), or(neg))
+    // tests connect via AND; the guard is not taken when some test is not taken
+    val tps = guard.tests.map(testProps(_, aMap))
+    (and(tps.map(_.tt)), or(tps.map(_.notTaken)))
   }
 
   private def testObj(test: Test, aMap: Map[Name, Obj]): Option[Obj] = {
@@ -437,7 +407,9 @@ final class Occurrence(pipelineContext: PipelineContext) {
         testObj(rec, aMap).map(FieldObj(RecordField(fieldName, recName), _))
       case TestCall(Id("hd", 1), List(arg)) =>
         testObj(arg, aMap).map(FieldObj(ListHead, _))
-      case TestCall(Id("element", 2), List(TestNumber(Some(index)), arg)) =>
+      case TestCall(Id("tl", 1), List(arg)) =>
+        testObj(arg, aMap).map(FieldObj(ListTail, _))
+      case TestCall(Id("element", 2), List(TestInteger(Some(index)), arg)) =>
         testObj(arg, aMap).map(FieldObj(TupleField(index, None), _))
       case _ =>
         None
@@ -454,388 +426,447 @@ final class Occurrence(pipelineContext: PipelineContext) {
         .map(_.reverse)
     }
     test match {
-      case TestAtom(s)     => (Some(AtomLitType(s)), Some(AtomLitType(s)))
-      case TestBinaryLit() => (Some(BinaryType), None)
-      case TestNumber(_)   => (Some(NumberType), None)
+      case TestAtom(s) =>
+        (Some(AtomLitType(s)), Some(AtomLitType(s)))
+      case TestBinaryLit() =>
+        (Some(BinaryType), None)
+      case TestInteger(_) =>
+        (Some(IntegerType), None)
+      case TestFloat() =>
+        (Some(FloatType), None)
+      case TestString() =>
+        (Some(ListType(charType)), None)
+      case TestUnOp("-" | "+", TestInteger(_)) =>
+        (Some(IntegerType), None)
+      case TestUnOp("-" | "+", TestFloat()) =>
+        (Some(FloatType), None)
       case TestTuple(tests) =>
         val (pos, neg) = tests.map(cmpTypes).unzip
         (unzipOpt(pos).map(TupleType(_)), unzipOpt(neg).map(TupleType(_)))
-      case _ => (None, None)
+      case _ =>
+        (None, None)
     }
   }
 
-  private def cmpProps(obj: Obj, test: Test): (Prop, Prop) = {
-    val (posTy, negTy) = cmpTypes(test)
-    val pos = posTy.map(Pos(obj, _)).getOrElse(Unknown)
-    val neg = negTy.map(Neg(obj, _)).getOrElse(Unknown)
-    (pos, neg)
+  private def cmpProps(obj: Obj, test: Test, aMap: AMap): (Prop, Prop) = {
+    test match {
+      case rc: TestRecordCreate =>
+        (Pos(obj, RecordType(rc.recName)(module)), Unknown)
+      case _ =>
+        val (posTy, negTy) = cmpTypes(test)
+        val pos = posTy.map(Pos(obj, _)).getOrElse(Unknown)
+        val neg = negTy.map(Neg(obj, _)).getOrElse(Unknown)
+        (pos, neg)
+    }
   }
 
-  private def testProps(test: Test, aMap: Map[Name, Obj]): (Prop, Prop) = {
+  // Equality narrowing is symmetric in operand order: refine whichever side is a
+  // tracked object against the other side's value (e.g. both `X =:= a` and `a =:= X`).
+  private def eqProps(test1: Test, test2: Test, aMap: Map[Name, Obj]): (Prop, Prop) =
+    testObj(test1, aMap)
+      .map(cmpProps(_, test2, aMap))
+      .orElse(testObj(test2, aMap).map(cmpProps(_, test1, aMap)))
+      .getOrElse((Unknown, Unknown))
+
+  // A test whose result can be anything and whose throw-cause is
+  // inexpressible; `ev` carries whatever is known from its sub-evaluations.
+  private def opaque(ev: Prop): TP =
+    TP(ev, ev, ev, th = Unknown, resT = None)
+
+  // A test that evaluates its components but can never be `true`
+  // (tuples, conses, map/record literals, numbers, ...); it throws only if
+  // some component throws.
+  private def neverTrue(args: List[Test], aMap: AMap): TP = {
+    val tps = args.map(testProps(_, aMap))
+    val ev = and(tps.map(_.ev))
+    TP(False, ev, ev, th = or(tps.map(_.th)), resT = None)
+  }
+
+  private def objProp(test: Test, aMap: AMap, ty: Type): Prop =
+    testObj(test, aMap).map(Pos(_, ty)).getOrElse(True)
+
+  private def objProps(test: Test, aMap: AMap, ty: Type): (Prop, Prop) =
+    testObj(test, aMap) match {
+      case Some(obj) => (Pos(obj, ty), Neg(obj, ty))
+      case None      => (True, True)
+    }
+
+  // Facts implied by `test` having been evaluated, without throwing, in a
+  // position that requires type `ty` (the enclosing operation throws otherwise).
+  private def evIn(test: Test, ty: Type, aMap: AMap): Prop =
+    and(List(testProps(test, aMap).ev, objProp(test, aMap, ty)))
+
+  // "the result of `test`, if any, is a boolean"
+  // as a proposition when the test is a trackable object, no info otherwise
+  private def boolFact(test: Test, tp: TP, aMap: AMap): Prop =
+    if (tp.resT.exists(subtype.gradualSubType(_, booleanType))) True
+    else objProp(test, aMap, booleanType)
+
+  // "evaluated to boolean `false`": non-true plus boolean-ness of the result
+  private def bff(test: Test, tp: TP, aMap: AMap): Prop =
+    and(List(tp.ff, boolFact(test, tp, aMap)))
+
+  // Throw-domain duals of objProp/boolFact: facts holding about `test`'s
+  // value when the enclosing operation threw because of it. Inexpressible
+  // for untrackable tests - Unknown, which absorbs the disjunction.
+  private def thNot(test: Test, aMap: AMap, ty: Type): Prop =
+    testObj(test, aMap).map(Neg(_, ty)).getOrElse(Unknown)
+
+  private def thIs(test: Test, aMap: AMap, ty: Type): Prop =
+    testObj(test, aMap).map(Pos(_, ty)).getOrElse(Unknown)
+
+  // "the result of `test` is not a boolean" as a throw-cause: impossible for
+  // structurally-boolean tests, a Neg for trackable ones, unknowable otherwise
+  private def thNotBool(test: Test, tp: TP, aMap: AMap): Prop =
+    if (tp.resT.exists(subtype.gradualSubType(_, booleanType))) False
+    else thNot(test, aMap, booleanType)
+
+  // A type-test on `arg`: true iff `arg` has type `ty`, throws only if
+  // evaluating `arg` throws.
+  private def typeTest(arg: Test, ty: Type, aMap: AMap): TP = {
+    val tpArg = testProps(arg, aMap)
+    val (pos, neg) = objProps(arg, aMap, ty)
+    TP(and(List(pos, tpArg.ev)), and(List(neg, tpArg.ev)), tpArg.ev, th = tpArg.th, resT = Some(booleanType))
+  }
+
+  private def testProps(test: Test, aMap: Map[Name, Obj]): TP = {
     test match {
+      // literals evaluate to themselves and never throw
+      case TestAtom("true") =>
+        TP(True, False, True, th = False, resT = Some(booleanType))
+      case TestAtom("false") =>
+        TP(False, True, True, th = False, resT = Some(booleanType))
+      case TestAtom(_) | TestInteger(_) | TestFloat() | TestString() | TestNil() | TestBinaryLit() |
+          TestRecordIndex(_, _) =>
+        TP(False, True, True, th = False, resT = None)
+      case TestVar(v) =>
+        // a bare variable test passes iff the variable is `true`
+        val obj = aMap.getOrElse(v, VarObj(v))
+        TP(Pos(obj, trueType), Neg(obj, trueType), True, th = False, resT = None)
+      // structured literals: never `true`, their components are evaluated
+      case TestTuple(elems) =>
+        neverTrue(elems, aMap)
+      case TestCons(h, t) =>
+        neverTrue(List(h, t), aMap)
+      case TestMapCreate(kvs) =>
+        neverTrue(kvs.flatMap { case (k, v) => List(k, v) }, aMap)
+      case TestRecordCreate(_, fields) =>
+        neverTrue(fields.map(_.value), aMap)
+      case TestRecordSelect(rec, recName, _) =>
+        // selection throws iff `rec` throws or is not a #recName{}
+        val tpRec = testProps(rec, aMap)
+        val recTy = RecordType(recName)(module)
+        val ev = and(List(tpRec.ev, objProp(rec, aMap, recTy)))
+        val th = or(List(tpRec.th, thNot(rec, aMap, recTy)))
+        val (pos, neg) = objProps(test, aMap, trueType)
+        TP(and(List(pos, ev)), and(List(neg, ev)), ev, th, resT = None)
+      case TestNativeRecordSelect(rec, _, _) =>
+        opaque(testProps(rec, aMap).ev)
+      case TestMapUpdate(map, kvs) =>
+        // update throws unless `map` is a map, but also on a missing key for
+        // `:=` associations (not distinguished in the AST) - th stays Unknown
+        val tpMap = testProps(map, aMap)
+        val kvTps = kvs.flatMap { case (k, v) => List(k, v) }.map(testProps(_, aMap))
+        val ev = and(objProp(map, aMap, MapType(Map(), AnyType, AnyType)) :: tpMap.ev :: kvTps.map(_.ev))
+        TP(False, ev, ev, th = Unknown, resT = None)
       case TestCall(Id(pred, 1), List(arg)) if unary_predicates.isDefinedAt(pred) =>
-        val tp = unary_predicates(pred)
-        testObj(arg, aMap)
-          .map(obj => (Pos(obj, tp), Neg(obj, tp)))
-          .getOrElse(Unknown, Unknown)
-      case TestCall(Id("is_function", 2), List(arg, TestNumber(Some(arity)))) =>
+        typeTest(arg, unary_predicates(pred), aMap)
+      case TestCall(Id("is_function", 2), List(arg, TestInteger(Some(arity)))) =>
         val tPos = FunType(0, List.fill(arity.intValue)(AnyType), AnyType)
         val tNeg = FunType(0, List.fill(arity.intValue)(NoneType), AnyType)
-        testObj(arg, aMap)
-          .map(obj => (Pos(obj, tPos), Neg(obj, tNeg)))
-          .getOrElse(Unknown, Unknown)
-      case TestCall(Id("is_record", 2 | 3), arg :: TestAtom(recName) :: _) =>
-        val tp = RecordType(recName)(module)
-        testObj(arg, aMap)
-          .map(obj => (Pos(obj, tp), Neg(obj, tp)))
-          .getOrElse(Unknown, Unknown)
-      case TestUnOp("not", test) =>
-        testProps(test, aMap).swap
-      case TestBinOp("and" | "andalso", test1, test2) =>
-        val (pos1, neg1) = testProps(test1, aMap)
-        val (pos2, neg2) = testProps(test2, aMap)
-        (and(List(pos1, pos2)), or(List(neg1, neg2)))
-      case TestBinOp("or" | "orelse", test1, test2) =>
-        val (pos1, neg1) = testProps(test1, aMap)
-        val (pos2, neg2) = testProps(test2, aMap)
-        (or(List(pos1, pos2)), and(List(neg1, neg2)))
-      case TestBinOp("==" | "=:=", lhs, cmp) =>
-        testObj(lhs, aMap)
-          .map(cmpProps(_, cmp))
-          .getOrElse((Unknown, Unknown))
-      case TestBinOp("=/=" | "/=", lhs, cmp) =>
-        testObj(lhs, aMap)
-          .map(cmpProps(_, cmp))
-          .getOrElse((Unknown, Unknown))
-          .swap
-      case _ =>
-        (Unknown, Unknown)
+        val tpArg = testProps(arg, aMap)
+        val pos = testObj(arg, aMap).map(Pos(_, tPos)).getOrElse(True)
+        val neg = testObj(arg, aMap).map(Neg(_, tNeg)).getOrElse(True)
+        TP(and(List(pos, tpArg.ev)), and(List(neg, tpArg.ev)), tpArg.ev, th = tpArg.th, resT = Some(booleanType))
+      case TestCall(Id("is_function", 2), List(arg, _)) =>
+        // non-literal arity: narrow to any fun; evaluation may throw on a bad
+        // arity argument, and there is no precise negative
+        val tpArg = testProps(arg, aMap)
+        val pos = objProp(arg, aMap, AnyFunType)
+        TP(and(List(pos, tpArg.ev)), tpArg.ev, tpArg.ev, th = Unknown, resT = Some(booleanType))
+      case TestCall(Id("is_record", 3), List(arg, TestAtom(modName), TestAtom(recName))) =>
+        typeTest(arg, nativeRecordTypeFor(modName, recName), aMap)
+      case TestCall(Id("is_record", 2), List(arg, TestAtom(recName))) =>
+        typeTest(arg, resolveIsRecord2Name(recName), aMap)
+      // erlc allows for integer arity in guards only.
+      // erlc errors for negative arities.
+      // erlc only warns "guard is always false" for 0 arity.
+      case TestCall(Id("is_record", 3), arg :: TestAtom(_) :: TestInteger(Some(0)) :: Nil) =>
+        val tpArg = testProps(arg, aMap)
+        TP(False, tpArg.ev, tpArg.ev, th = tpArg.th, resT = Some(booleanType))
+      case TestCall(Id("is_record", 3), arg :: TestAtom(recName) :: TestInteger(Some(arity)) :: Nil) =>
+        val recType =
+          if (util.isRecordDefined(module, recName, arity)) RecordType(recName)(module)
+          // There is a common pattern that a private/opaque record `my_record` is defined (without a header file)
+          // directly in the module `my_record` and is tested by record name and arity.
+          // If such record definition exists indeed, we "instantiate" it here then.
+          else if (util.isRecordDefined(recName, recName, arity)) RecordType(recName)(recName)
+          else TupleType(AtomLitType(recName) :: List.fill(arity - 1)(AnyType))
+        typeTest(arg, recType, aMap)
+      case TestCall(Id("is_map_key", 2), List(keyArg, mapArg)) =>
+        val tpKey = testProps(keyArg, aMap)
+        val tpMap = testProps(mapArg, aMap)
+        val mapKT = mapArg match {
+          case TestMapCreate(kvs) if kvs.nonEmpty =>
+            val keys = kvs.map { case (k, _) => Key.fromTest(k) }
+            Option.when(keys.forall(_.isDefined))(UnionType(keys.flatten.map(Key.asType).toSet))
+          case _ =>
+            None
+        }
+        val mapTy = MapType(Map(), AnyType, AnyType)
+        // `is_map_key(K, M)` throws unless M is a map
+        val ev = and(List(tpKey.ev, tpMap.ev, objProp(mapArg, aMap, mapTy)))
+        val th = mapArg match {
+          case _: TestMapCreate => or(List(tpKey.th, tpMap.th))
+          case _                => or(List(tpKey.th, tpMap.th, thNot(mapArg, aMap, mapTy)))
+        }
+        // is_map_key(K, #{k1 => .., k2 => ....}) -> K :: k1 | k2 | ...
+        val keyFact = mapKT.flatMap(keyTy => testObj(keyArg, aMap).map(Pos(_, keyTy))).getOrElse(True)
+        TP(and(List(keyFact, ev)), ev, ev, th, resT = Some(booleanType))
+      case TestCall(Id("element", 2), List(TestInteger(i), tup)) =>
+        // element/2 with a known index throws unless `tup` is a tuple, but
+        // also on an out-of-range index - th stays Unknown
+        val ev = evIn(tup, AnyTupleType, aMap)
+        val (pos, neg) = objProps(test, aMap, trueType)
+        TP(and(List(pos, ev)), and(List(neg, ev)), ev, th = Unknown, resT = None)
+      case TestCall(Id("element", 2), List(idx, tup)) =>
+        // element/2 throws unless `idx` is an integer and `tup` a tuple, but
+        // also on an out-of-range index - th stays Unknown
+        val ev = and(List(evIn(idx, IntegerType, aMap), evIn(tup, AnyTupleType, aMap)))
+        val (pos, neg) = objProps(test, aMap, trueType)
+        TP(and(List(pos, ev)), and(List(neg, ev)), ev, th = Unknown, resT = None)
+      case TestCall(Id("hd" | "tl", 1), List(arg)) =>
+        // throws iff `arg` throws, is not a list, or is []
+        val tpArg = testProps(arg, aMap)
+        val listTy = ListType(AnyType)
+        val ev = and(List(tpArg.ev, objProp(arg, aMap, listTy)))
+        val th = or(List(tpArg.th, thNot(arg, aMap, listTy), thIs(arg, aMap, NilType)))
+        val (pos, neg) = objProps(test, aMap, trueType)
+        TP(and(List(pos, ev)), and(List(neg, ev)), ev, th, resT = None)
+      case TestCall(_, args) =>
+        // unknown guard BIF: outcome unknown, but its arguments were evaluated
+        opaque(and(args.map(testProps(_, aMap).ev)))
+      case TestUnOp("not", arg) =>
+        val tpArg = testProps(arg, aMap)
+        val bf = boolFact(arg, tpArg, aMap)
+        val ev = and(List(tpArg.ev, bf))
+        val th = or(List(tpArg.th, thNotBool(arg, tpArg, aMap)))
+        TP(and(List(tpArg.ff, bf)), and(List(tpArg.tt, bf)), ev, th, resT = Some(booleanType))
+      case TestUnOp("bnot", arg) =>
+        val tpArg = testProps(arg, aMap)
+        val ev = and(List(tpArg.ev, objProp(arg, aMap, IntegerType)))
+        val th = or(List(tpArg.th, thNot(arg, aMap, IntegerType)))
+        TP(False, ev, ev, th, resT = None)
+      case TestUnOp("+" | "-", arg) =>
+        val tpArg = testProps(arg, aMap)
+        val ev = and(List(tpArg.ev, objProp(arg, aMap, numberType)))
+        val th = or(List(tpArg.th, thNot(arg, aMap, numberType)))
+        TP(False, ev, ev, th, resT = None)
+      case TestUnOp(_, arg) =>
+        opaque(testProps(arg, aMap).ev)
+      case TestBinOp("and", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, boolFact(arg1, tp1, aMap), tp2.ev, boolFact(arg2, tp2, aMap)))
+        val tt = and(List(tp1.tt, tp2.tt, ev))
+        val ff = and(List(ev, or(List(tp1.ff, tp2.ff))))
+        val th = or(List(tp1.th, thNotBool(arg1, tp1, aMap), tp2.th, thNotBool(arg2, tp2, aMap)))
+        TP(tt, ff, ev, th, resT = Some(booleanType))
+      case TestBinOp("or", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, boolFact(arg1, tp1, aMap), tp2.ev, boolFact(arg2, tp2, aMap)))
+        val tt = and(List(ev, or(List(tp1.tt, tp2.tt))))
+        val ff = and(List(ev, tp1.ff, tp2.ff))
+        val th = or(List(tp1.th, thNotBool(arg1, tp1, aMap), tp2.th, thNotBool(arg2, tp2, aMap)))
+        TP(tt, ff, ev, th, resT = Some(booleanType))
+      case TestBinOp("xor", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, boolFact(arg1, tp1, aMap), tp2.ev, boolFact(arg2, tp2, aMap)))
+        val tt = and(List(ev, or(List(and(List(tp1.tt, tp2.ff)), and(List(tp1.ff, tp2.tt))))))
+        val ff = and(List(ev, or(List(and(List(tp1.tt, tp2.tt)), and(List(tp1.ff, tp2.ff))))))
+        val th = or(List(tp1.th, thNotBool(arg1, tp1, aMap), tp2.th, thNotBool(arg2, tp2, aMap)))
+        TP(tt, ff, ev, th, resT = Some(booleanType))
+      case TestBinOp("andalso", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        // arg1 is always evaluated and must be a boolean; arg2 only when arg1 is true
+        val ev = and(List(tp1.ev, boolFact(arg1, tp1, aMap)))
+        val tt = and(List(tp1.tt, tp2.tt, ev))
+        val ff = and(List(ev, or(List(bff(arg1, tp1, aMap), and(List(tp1.tt, tp2.ff))))))
+        val th = or(List(tp1.th, thNotBool(arg1, tp1, aMap), and(List(tp1.tt, tp2.th))))
+        TP(tt, ff, ev, th, resT = tp2.resT.map(subtype.join(_, falseType)))
+      case TestBinOp("orelse", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        // arg1 is always evaluated and must be a boolean; arg2 only when arg1 is false
+        val ev = and(List(tp1.ev, boolFact(arg1, tp1, aMap)))
+        val tt = and(List(ev, or(List(tp1.tt, and(List(bff(arg1, tp1, aMap), tp2.tt))))))
+        val ff = and(List(ev, bff(arg1, tp1, aMap), tp2.ff))
+        val th = or(List(tp1.th, thNotBool(arg1, tp1, aMap), and(List(bff(arg1, tp1, aMap), tp2.th))))
+        TP(tt, ff, ev, th, resT = tp2.resT.map(subtype.join(_, trueType)))
+      case TestBinOp("+" | "-" | "*", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, objProp(arg1, aMap, numberType), tp2.ev, objProp(arg2, aMap, numberType)))
+        val th = or(List(tp1.th, thNot(arg1, aMap, numberType), tp2.th, thNot(arg2, aMap, numberType)))
+        TP(False, ev, ev, th, resT = None)
+      case TestBinOp("/", arg1, arg2) =>
+        // also throws on division by zero - th stays Unknown
+        val ev = and(List(evIn(arg1, numberType, aMap), evIn(arg2, numberType, aMap)))
+        TP(False, ev, ev, th = Unknown, resT = None)
+      case TestBinOp("band" | "bor" | "bxor", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, objProp(arg1, aMap, IntegerType), tp2.ev, objProp(arg2, aMap, IntegerType)))
+        val th = or(List(tp1.th, thNot(arg1, aMap, IntegerType), tp2.th, thNot(arg2, aMap, IntegerType)))
+        TP(False, ev, ev, th, resT = None)
+      case TestBinOp("div" | "rem" | "bsl" | "bsr", arg1, arg2) =>
+        // also throw on a zero divisor / an absurd shift - th stays Unknown
+        val ev = and(List(evIn(arg1, IntegerType, aMap), evIn(arg2, IntegerType, aMap)))
+        TP(False, ev, ev, th = Unknown, resT = None)
+      case TestBinOp("==" | "=:=", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val (pos, neg) = eqProps(arg1, arg2, aMap)
+        val ev = and(List(tp1.ev, tp2.ev))
+        TP(and(List(pos, ev)), and(List(neg, ev)), ev, th = or(List(tp1.th, tp2.th)), resT = Some(booleanType))
+      case TestBinOp("=/=" | "/=", arg1, arg2) =>
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val (pos, neg) = eqProps(arg1, arg2, aMap)
+        val ev = and(List(tp1.ev, tp2.ev))
+        TP(and(List(neg, ev)), and(List(pos, ev)), ev, th = or(List(tp1.th, tp2.th)), resT = Some(booleanType))
+      case TestBinOp("<" | "=<" | ">" | ">=", arg1, arg2) =>
+        // term ordering never throws, but the operands are still evaluated
+        val tp1 = testProps(arg1, aMap)
+        val tp2 = testProps(arg2, aMap)
+        val ev = and(List(tp1.ev, tp2.ev))
+        TP(ev, ev, ev, th = or(List(tp1.th, tp2.th)), resT = Some(booleanType))
+      case TestBinOp(_, arg1, arg2) =>
+        opaque(and(List(testProps(arg1, aMap).ev, testProps(arg2, aMap).ev)))
     }
   }
 
-  private def patProps(x: String, path: Path, pat: Pat, env: Env): Option[(Prop, Prop)] = {
+  // What a pattern says about the value it matches:
+  //   - props   - how the scrutinee is refined when the pattern matches
+  //               (positive) and when it does not (negative), if anything
+  //               is known
+  //   - aliases - the variables the pattern binds, each paired with the
+  //               position it matches
+  //   - seeds   - fresh variables standing for values that no position
+  //               addresses (see the `PatMap` case), each paired with the
+  //               object it takes its type from. Ordered outside-in, so a
+  //               seed nested inside another one comes after it.
+  private case class PatInfo(props: Option[(Prop, Prop)], aliases: List[(Name, Obj)], seeds: List[(Name, Obj)])
+
+  private object PatInfo {
+    // A pattern that neither refines nor binds anything
+    val trivial: PatInfo = PatInfo(None, Nil, Nil)
+    // A pattern whose effect is beyond our precision
+    val inexpressible: PatInfo = PatInfo(Some(Unknown, Unknown), Nil, Nil)
+    // A pattern that binds nothing and refines only the value it matches
+    def leaf(pos: Prop, neg: Prop): PatInfo = PatInfo(Some(pos, neg), Nil, Nil)
+  }
+
+  private def patNode(posThis: Prop, negThis: Prop, subs: List[PatInfo]): PatInfo = {
+    val (posThat, negThat) = subs.flatMap(_.props).unzip
+    val pos = and(posThis :: posThat)
+    val neg = or(List(negThis, and(List(posThis, or(negThat)))))
+    PatInfo(Some(pos, neg), subs.flatMap(_.aliases), subs.flatMap(_.seeds))
+  }
+
+  private def patProps(x: String, path: Path, pat: Pat, env: Env): PatInfo = {
     pat match {
       case PatWild() =>
-        None
+        PatInfo.trivial
       case PatVar(v) =>
-        env.get(v) map { _ => (Unknown, Unknown) }
+        if (env.contains(v)) PatInfo.inexpressible
+        else PatInfo(None, List(v -> mkObj(x, path)), Nil)
       case PatAtom(s) =>
         val obj = mkObj(x, path)
-        val pos = Pos(obj, AtomLitType(s))
-        val neg = Neg(obj, AtomLitType(s))
-        Some(pos, neg)
-      case PatNumber() =>
-        val obj = mkObj(x, path)
-        val pos = Pos(obj, NumberType)
-        Some(pos, Unknown)
+        PatInfo.leaf(Pos(obj, AtomLitType(s)), Neg(obj, AtomLitType(s)))
+      case PatFloat() =>
+        PatInfo.leaf(Pos(mkObj(x, path), FloatType), Unknown)
       case PatInt() =>
-        val obj = mkObj(x, path)
-        val pos = Pos(obj, NumberType)
-        Some(pos, Unknown)
+        PatInfo.leaf(Pos(mkObj(x, path), IntegerType), Unknown)
       case PatTuple(elems) =>
-        val arity = elems.size
         val obj = mkObj(x, path)
-        val posThis = Pos(obj, TupleType(List.fill(arity)(AnyType)))
-        val negThis = Neg(obj, TupleType(List.fill(arity)(AnyType)))
-        val (posThat, negThat) = elems.zipWithIndex.flatMap { case (elem, i) =>
+        val arity = elems.size
+        val tupleTy = TupleType(List.fill(arity)(AnyType))
+        val elemsInfo = elems.zipWithIndex.map { case (elem, i) =>
           patProps(x, path :+ TupleField(i, Some(arity)), elem, env)
-        }.unzip
-        val pos = and(posThis :: posThat)
-        val neg =
-          if (negThat.isEmpty) negThis
-          else or(List(negThis, and(List(posThis, or(negThat)))))
-        Some(pos, neg)
+        }
+        patNode(Pos(obj, tupleTy), Neg(obj, tupleTy), elemsInfo)
       case PatRecord(recName, fields, gen) =>
         val obj = mkObj(x, path)
-        val posThis = Pos(obj, RecordType(recName)(module))
-        val negThis = Neg(obj, RecordType(recName)(module))
-        val (posNamed, negNamed) =
-          fields.flatMap(field => patProps(x, path :+ RecordField(field.name, recName), field.pat, env)).unzip
-        val (posThat, negThat) = gen match {
-          case None => (posNamed, negNamed)
-          case Some(genPat) =>
-            val recDecl = util.getRecord(module, recName)
-            recDecl match {
-              case None => (posNamed, negNamed)
-              case Some(recDecl) =>
-                val (posGen, negGen) =
-                  recDecl.fields
-                    .filter(fDecl => !fields.exists(f => f.name == fDecl._1))
-                    .flatMap(fDecl => patProps(x, path :+ RecordField(fDecl._1, recName), genPat, env))
-                    .unzip
-                (posNamed ++ posGen, negNamed ++ negGen)
-            }
+        val recTy = RecordType(recName)(module)
+        val namedInfo =
+          fields.map(field => patProps(x, path :+ RecordField(field.name, recName), field.pat, env))
+        lazy val rec = util.getRecord(module, recName)
+        // `_ = GenPat` applies to every field not mentioned explicitly
+        val genInfo = gen.toList.flatMap { genPat =>
+          rec.fields
+            .filter(fDecl => !fields.exists(f => f.name == fDecl.name))
+            .map(fDecl => patProps(x, path :+ RecordField(fDecl.name, recName), genPat, env))
         }
-        val pos = and(posThis :: posThat)
-        val neg =
-          if (negThat.isEmpty) negThis
-          else or(List(negThis, and(List(posThis, or(negThat)))))
-        Some(pos, neg)
-      case PatMatch(PatVar(alias), pat1) =>
-        env.get(alias) match {
-          case Some(_) =>
-            Some(Unknown, Unknown)
-          case None =>
-            patProps(x, path, pat1, env)
+        patNode(Pos(obj, recTy), Neg(obj, recTy), genInfo ++ namedInfo)
+      case PatMatch(pat1, pat2) =>
+        val info1 = patProps(x, path, pat1, env)
+        val info2 = patProps(x, path, pat2, env)
+        // at most one side can be informative (the other is then a variable or
+        // a wildcard); two informative sides are beyond our precision
+        val props = (info1.props, info2.props) match {
+          case (None, props) => props
+          case (props, None) => props
+          case _             => Some(Unknown, Unknown)
         }
-      case PatMatch(pat1, PatVar(alias)) =>
-        env.get(alias) match {
-          case Some(_) =>
-            Some(Unknown, Unknown)
-          case None =>
-            patProps(x, path, pat1, env)
-        }
+        PatInfo(props, info1.aliases ++ info2.aliases, info1.seeds ++ info2.seeds)
       case PatMap(pats) =>
-        boundary {
-          val obj = mkObj(x, path)
-          val posThis = Pos(obj, MapType(Map(), AnyType, AnyType))
-          val negThis = Neg(obj, MapType(Map(), AnyType, AnyType))
-          val fields = pats.map { case (patK, patV) =>
-            Key.fromTest(patK) match {
-              case Some(key) => (key, patV)
-              case None      => boundary.break(Some(posThis, Unknown))
-            }
+        val obj = mkObj(x, path)
+        val mapTy = MapType(Map(), AnyType, AnyType)
+        val assocsInfo = pats.map { case (patK, patV) =>
+          Key.fromTest(patK) match {
+            case Some(key) =>
+              val keyPath = path :+ MapField(key)
+              val info = patProps(x, keyPath, patV, env)
+              // the key is required even when its value pattern constrains nothing
+              val objKey = mkObj(x, keyPath)
+              info.copy(props = info.props.orElse(Some(Pos(objKey, AnyType), Neg(objKey, AnyType))))
+            case None =>
+              val v = genVar()
+              val info = patProps(v, Nil, patV, env)
+              val seed = v -> mkObj(x, path :+ AnyMapField)
+              val pos = info.props.map(_._1).getOrElse(True)
+              PatInfo(Some(pos, Unknown), info.aliases, seed :: info.seeds)
           }
-          val (posThat, negThat) = fields.flatMap { case (field, pat) =>
-            patProps(x, path :+ MapField(field), pat, env)
-          }.unzip
-          val (posFields, negFields) = fields.map { case (field, _) =>
-            val objField = mkObj(x, path :+ MapField(field))
-            (Pos(objField, AnyType), Neg(objField, AnyType))
-          }.unzip
-          val pos = and(posThis :: posFields ::: posThat)
-          val neg =
-            if (negThat.isEmpty && negFields.isEmpty) negThis
-            else or(List(negThis, and(List(posThis, or(negThat ::: negFields)))))
-          Some(pos, neg)
         }
+        patNode(Pos(obj, mapTy), Neg(obj, mapTy), assocsInfo)
       case PatNil() =>
         val obj = mkObj(x, path)
-        val pos = Pos(obj, NilType)
-        val neg = Neg(obj, NilType)
-        Some(pos, neg)
+        PatInfo.leaf(Pos(obj, NilType), Neg(obj, NilType))
       case PatCons(hpat, tpat) =>
         val obj = mkObj(x, path)
-        val posThis = And(List(Pos(obj, ListType(AnyType)), Neg(obj, NilType)))
-        val negThis = Or(List(Neg(obj, ListType(AnyType)), Pos(obj, NilType)))
-        val (posThat, negThat) =
-          List(patProps(x, path :+ ListHead, hpat, env), patProps(x, path :+ ListTail, tpat, env)).flatten.unzip
-        val pos = And(posThis :: posThat)
-        val neg = Or(List(negThis, And(List(posThis, Or(negThat)))))
-        Some(pos, neg)
+        val posThis = and(List(Pos(obj, ListType(AnyType)), Neg(obj, NilType)))
+        val negThis = or(List(Neg(obj, ListType(AnyType)), Pos(obj, NilType)))
+        val hInfo = patProps(x, path :+ ListHead, hpat, env)
+        val tInfo = patProps(x, path :+ ListTail, tpat, env)
+        patNode(posThis, negThis, List(hInfo, tInfo))
       case PatBinary(_) =>
-        val obj = mkObj(x, path)
-        val pos = Pos(obj, BinaryType)
-        val neg = Unknown
-        Some(pos, neg)
+        PatInfo.leaf(Pos(mkObj(x, path), BinaryType), Unknown)
       case _ =>
-        Some(Unknown, Unknown)
+        PatInfo.inexpressible
     }
   }
 
-  private def simpleOverlap(t1: Type, t2: Type): Option[Boolean] =
-    (kind(t1), kind(t2)) match {
-      case (Some(k1), Some(k2)) =>
-        Some(k1 == k2)
-      case (_, _) =>
-        if (subtype.subType(t1, t2) || subtype.subType(t2, t1))
-          Some(true)
-        else
-          None
+  // Binds each fresh variable of `seeds` to the type of the value it stands
+  // for. Seeds come outside-in, so one nested inside another resolves against
+  // the variable that has just been bound.
+  private def bindSeeds(env: Env, seeds: List[(Name, Obj)]): Env =
+    seeds.foldLeft(env) { case (env, (v, obj)) =>
+      env + (v -> typePathRef(env(objId(obj)), objPath(obj)))
     }
-
-  private def overlap(t1: Type, t2: Type): Option[Boolean] =
-    (t1, t2) match {
-      case (_, _) if t1 == t2 =>
-        Some(true)
-      case (AnyType, _) =>
-        Some(true)
-      case (_, AnyType) =>
-        Some(true)
-      case (NoneType, _) =>
-        Some(false)
-
-      case (DynamicType, _) =>
-        Some(true)
-      case (_, DynamicType) =>
-        Some(true)
-
-      case (BoundedDynamicType(bound), _) =>
-        overlap(bound, t2)
-      case (_, BoundedDynamicType(bound)) =>
-        overlap(t1, bound)
-
-      case (FreeVarType(_), _) =>
-        Some(true)
-
-      // Unions
-      case (UnionType(ts), _) =>
-        boundary {
-          var allFalse = true
-          for (t1 <- ts) {
-            overlap(t1, t2) match {
-              case Some(true) =>
-                boundary.break(Some(true))
-              case None =>
-                allFalse = false
-              case Some(false) =>
-                ()
-            }
-          }
-          if (allFalse) Some(false) else None
-        }
-      case (_, UnionType(ts)) =>
-        boundary {
-          var allFalse = true
-          for (t2 <- ts) {
-            overlap(t1, t2) match {
-              case Some(true) =>
-                boundary.break(Some(true))
-              case None =>
-                allFalse = false
-              case Some(false) =>
-                ()
-            }
-          }
-          if (allFalse) Some(false) else None
-        }
-
-      case (AtomLitType(l1), AtomLitType(l2)) =>
-        Some(l1 == l2)
-
-      case (RemoteType(rid, args), _) =>
-        val body = util.getTypeDeclBody(rid, args)
-        overlap(body, t2)
-      // t2 is generated from "predicates" - they are always without aliases
-      case (_, RemoteType(_, _)) =>
-        throw new IllegalStateException(t2.toString)
-
-      // funs
-      case (FunType(_, ins1, _), FunType(_, ins2, _)) =>
-        if (ins1.size != ins2.size)
-          Some(false)
-        else
-          None
-      case (FunType(_, _, _), AnyFunType) =>
-        Some(true)
-      case (AnyFunType, FunType(_, _, _)) =>
-        Some(true)
-      case (AnyArityFunType(_), AnyFunType) =>
-        Some(true)
-      case (AnyFunType, AnyArityFunType(_)) =>
-        Some(true)
-      case (AnyArityFunType(_), FunType(_, _, _)) =>
-        None
-      case (FunType(_, _, _), AnyArityFunType(_)) =>
-        None
-      case (FunType(_, _, _), _) =>
-        Some(false)
-      case (_, FunType(_, _, _)) =>
-        Some(false)
-      case (AnyFunType, _) =>
-        Some(false)
-      case (_, AnyFunType) =>
-        Some(false)
-
-      // tuples and records
-      case (TupleType(ts1), TupleType(ts2)) =>
-        if (ts1.size != ts2.size) Some(false)
-        else
-          boundary {
-            var allTrue = true
-            for ((t1, t2) <- ts1.lazyZip(ts2)) {
-              overlap(t1, t2) match {
-                case Some(false) =>
-                  boundary.break(Some(false))
-                case Some(true) =>
-                  ()
-                case None =>
-                  allTrue = false
-              }
-            }
-            if (allTrue) Some(true) else None
-          }
-      case (TupleType(_), AnyTupleType) =>
-        Some(true)
-      case (AnyTupleType, TupleType(_)) =>
-        Some(true)
-      case (RecordType(_), AnyTupleType) =>
-        Some(true)
-      case (RefinedRecordType(_, _), AnyTupleType) =>
-        Some(true)
-      case (AnyTupleType, RecordType(_)) =>
-        Some(true)
-      case (RecordType(n1), RecordType(n2)) =>
-        Some(n1 == n2)
-      case (RefinedRecordType(t, _), RecordType(n)) =>
-        Some(n == t.name)
-      case (r: RecordType, TupleType(elems)) =>
-        util.getRecordArity(r.module, r.name) match {
-          case Some(arity) if arity + 1 == elems.size =>
-            overlap(AtomLitType(r.name), elems.head)
-          case _ =>
-            Some(false)
-        }
-      case (TupleType(elems), r: RecordType) =>
-        util.getRecordArity(r.module, r.name) match {
-          case Some(arity) if arity + 1 == elems.size =>
-            overlap(elems.head, AtomLitType(r.name))
-          case _ =>
-            Some(false)
-        }
-      case (RefinedRecordType(t, _), TupleType(elems)) =>
-        util.getRecordArity(t.module, t.name) match {
-          case Some(arity) if arity + 1 == elems.size =>
-            overlap(AtomLitType(t.name), elems.head)
-          case _ =>
-            Some(false)
-        }
-      case (TupleType(_), _) =>
-        Some(false)
-      case (_, TupleType(_)) =>
-        Some(false)
-      case (AnyTupleType, _) =>
-        Some(false)
-      case (_, AnyTupleType) =>
-        Some(false)
-
-      case (_, RefinedRecordType(_, _)) =>
-        // t2 comes from props
-        throw new IllegalStateException(t2.toString)
-
-      case (ListType(_) | NilType, ListType(_) | NilType) =>
-        Some(true)
-      case (ListType(_) | NilType, _) =>
-        Some(false)
-      case (_, ListType(_) | NilType) =>
-        Some(false)
-
-      case _ =>
-        simpleOverlap(t1, t2)
-    }
-
-  private def restrict(t1: Type, t2: Type): Type = {
-    (t1, t2) match {
-      case (t, s) if overlap(t, s).isFalse =>
-        NoneType
-      case (t, s) if subtype.gradualSubType(t, s) =>
-        t
-      case (t, s) if subtype.gradualSubType(s, t) =>
-        s
-      case (UnionType(ts), s) =>
-        UnionType(ts.map(restrict(_, s)))
-      case (RemoteType(rid, args), _) =>
-        val body = util.getTypeDeclBody(rid, args)
-        val restricted = restrict(body, t2)
-        if (restricted == body) t1 else restricted
-      case (BoundedDynamicType(t), s) =>
-        BoundedDynamicType(restrict(t, s))
-      case (DynamicType, s) =>
-        BoundedDynamicType(s)
-      case (_, _) =>
-        t1
-    }
-  }
 
   def remove(t1: Type, t2: Type): Type =
     (t1, t2) match {
@@ -845,31 +876,22 @@ final class Occurrence(pipelineContext: PipelineContext) {
         val body = util.getTypeDeclBody(rid, args)
         val removed = remove(body, t2)
         if (removed == body) t1 else removed
+      case (ListType(e), _) =>
+        val body = UnionType(Set(NilType, ConsType(e, ListType(e))))
+        val removed = remove(body, t2)
+        if (removed == body) t1 else removed
       case (UnionType(ts), s) =>
-        UnionType(ts.map(remove(_, s)))
+        subtype.join(ts.map(remove(_, s)))
+      case (InterType(ts), s) =>
+        subtype.inter(ts.toList.map(remove(_, s)))
       case (BoundedDynamicType(t), s) =>
         BoundedDynamicType(remove(t, s))
       case (t, _) =>
         t
     }
 
-  private def TupleType_*(elems: List[Type]): Type =
-    if (elems.exists(subtype.isNoneType))
-      NoneType
-    else
-      TupleType(elems)
-
-  private def MapType_*(props: Map[Types.Key, Types.Prop], kTy: Type, vTy: Type): Type = {
-    val hasPropEmpty = props.values.exists { case Prop(req, tp) => req && subtype.isNoneType(tp) }
-    val propsNonEmpty = props.filter { case (_, Prop(req, tp)) => req || !subtype.isNoneType(tp) }
-    if (hasPropEmpty)
-      NoneType
-    else
-      MapType(propsNonEmpty, kTy, vTy)
-  }
-
   private def refineRecord(t: Type, field: String, refined: Type): Type = {
-    if (subtype.isNoneType(refined)) {
+    if (Subtype.isNoneType(refined)) {
       NoneType
     } else {
       t match {
@@ -886,14 +908,16 @@ final class Occurrence(pipelineContext: PipelineContext) {
     (t, path) match {
       case (_, Nil) =>
         pol match {
-          case + => restrict(t, s)
+          case + => subtype.meet(t, s)
           case - => remove(t, s)
         }
       case (RemoteType(rid, args), _) =>
         val body = util.getTypeDeclBody(rid, args)
         update(body, path, pol, s)
       case (UnionType(ts), _) =>
-        UnionType(ts.map(update(_, path, pol, s)))
+        subtype.join(ts.map(update(_, path, pol, s)))
+      case (InterType(ts), _) =>
+        subtype.inter(ts.toList.map(update(_, path, pol, s)))
       case (BoundedDynamicType(t), _) =>
         BoundedDynamicType(update(t, path, pol, s))
       case (TupleType(ts), TupleField(pos, Some(arity)) :: path) if ts.size == arity =>
@@ -901,46 +925,42 @@ final class Occurrence(pipelineContext: PipelineContext) {
         val t1 = update(t, path, pol, s)
         TupleType_*(ts.updated(pos, t1))
       case (rt: RecordType, RecordField(fieldName, recName) :: path) if rt.name == recName =>
-        util.getRecord(rt.module, rt.name) match {
-          case Some(recDecl) =>
-            val t = recDecl.fMap(fieldName).tp
-            val t1 = update(t, path, pol, s)
+        util.getRecord(rt.module, rt.name).fMap.get(fieldName) match {
+          case Some(field) =>
+            val t1 = update(field.tp, path, pol, s)
             refineRecord(rt, fieldName, t1)
-          case _ => rt
+          case None => rt
         }
       case (rt: RecordType, TupleField(_, Some(arity)) :: _) =>
-        util.getRecord(rt.module, rt.name) match {
-          case Some(recDecl) if recDecl.fields.size + 1 == arity =>
-            val rTy = narrow.asTupleType(rt, arity).head
-            update(rTy, path, pol, s)
-          case _ => rt
-        }
+        val recDecl = util.getRecord(rt.module, rt.name)
+        if (recDecl.fields.size + 1 == arity) {
+          val rTy = narrow.asTupleType(rt, arity).head
+          update(rTy, path, pol, s)
+        } else rt
       case (rt: RefinedRecordType, RecordField(fieldName, recName) :: path) if rt.recType.name == recName =>
         if (rt.fields.contains(fieldName)) {
           val t = rt.fields(fieldName)
           val t1 = update(t, path, pol, s)
           refineRecord(rt, fieldName, t1)
         } else {
-          util.getRecord(rt.recType.module, rt.recType.name) match {
-            case Some(recDecl) =>
-              val t = recDecl.fMap(fieldName).tp
-              val t1 = update(t, path, pol, s)
+          util.getRecord(rt.recType.module, rt.recType.name).fMap.get(fieldName) match {
+            case Some(field) =>
+              val t1 = update(field.tp, path, pol, s)
               refineRecord(rt, fieldName, t1)
             case None => rt
           }
         }
       case (rt: RefinedRecordType, TupleField(_, Some(arity)) :: _) =>
-        util.getRecord(rt.recType.module, rt.recType.name) match {
-          case Some(recDecl) if recDecl.fields.size + 1 == arity =>
-            val rTy = narrow.asTupleType(rt, arity).head
-            update(rTy, path, pol, s)
-          case _ => rt
-        }
+        val recDecl = util.getRecord(rt.recType.module, rt.recType.name)
+        if (recDecl.fields.size + 1 == arity) {
+          val rTy = narrow.asTupleType(rt, arity).head
+          update(rTy, path, pol, s)
+        } else rt
       case (MapType(props, kTy, vTy), MapField(field) :: path) =>
         if (props.contains(field) || (subtype.subType(Key.asType(field), kTy) && pol == +)) {
           val refinedProps = props.updatedWith(field) {
-            case Some(Prop(req, tp)) => Some(Prop((pol == +) || req, update(tp, path, pol, s)))
-            case None                => Some(Prop(req = true, update(vTy, path, pol, s)))
+            case Some(MapProp(req, tp)) => Some(MapProp((pol == +) || req, update(tp, path, pol, s)))
+            case None                   => Some(MapProp(req = true, update(vTy, path, pol, s)))
           }
           MapType_*(refinedProps, kTy, vTy)
         } else {
@@ -950,23 +970,31 @@ final class Occurrence(pipelineContext: PipelineContext) {
           }
         }
       case (ListType(lt), ListHead :: path) =>
-        if (subtype.isNoneType(update(lt, path, pol, s)))
+        if (Subtype.isNoneType(update(lt, path, pol, s)))
           NoneType
         else
           ListType(lt)
       case (ListType(lt), ListTail :: path) =>
-        if (subtype.isNoneType(update(ListType(lt), path, pol, s)))
+        if (Subtype.isNoneType(update(ListType(lt), path, pol, s)))
           NoneType
         else
           ListType(lt)
-      case (_, TupleField(_, None) :: _) =>
-        AnyTupleType
+      case (ConsType(h, tl), ListHead :: path) =>
+        val h1 = update(h, path, pol, s)
+        ConsType_*(h1, tl)
+      case (ConsType(h, tl), ListTail :: path) =>
+        val tl1 = update(tl, path, pol, s)
+        ConsType_*(h, tl1)
+      case (TupleType(ts), TupleField(index, None) :: path) if index >= 1 && index <= ts.size =>
+        TupleType_*(ts.updated(index - 1, update(ts(index - 1), path, pol, s)))
+      case (_, TupleField(_, None) :: path) if pol == + =>
+        update(t, path, pol, AnyTupleType)
       case (_, _) =>
         t
     }
 
-  private def batchSelect(typeEnv: Env, propEnv: PropEnv, aMap: AMap): Env = {
-    val refinedEnvs = applyProps(propEnv, List(typeEnv))
+  private def batchSelect(typeEnv: Env, props: List[Prop], aMap: AMap): Env = {
+    val refinedEnvs = applyProps(props, List(typeEnv))
     var result: Env = Map.empty
     val names = typeEnv.keySet ++ aMap.keySet
     for (name <- names) {
@@ -974,9 +1002,9 @@ final class Occurrence(pipelineContext: PipelineContext) {
         case Some(obj) =>
           val id = objId(obj)
           val path = objPath(obj)
-          refinedEnvs.map(chooseType(_, id, typeEnv)).map(typePathRef(_, path))
+          refinedEnvs.map(_(id)).map(typePathRef(_, path))
         case None =>
-          refinedEnvs.map(chooseType(_, name, typeEnv))
+          refinedEnvs.map(_(name))
       }
       val t = ts match {
         case List(t1) => t1
@@ -988,10 +1016,10 @@ final class Occurrence(pipelineContext: PipelineContext) {
   }
 
   private def envSubtype(env1: Env, env2: Env): Boolean =
-    env1.forall { case (k1, t1) => env2.contains(k1) && subtype.gradualSubType(t1, env2(k1)) }
+    env1.forall { case (k, t1) => env2.get(k).exists(subtype.gradualSubType(t1, _)) }
 
   /** Removes redundant environments from a list
-    * by keeping only the less precise ones for subtyping */
+   * by keeping only the less precise ones for subtyping */
   private def keepBestEnvs(envs: List[Env]): List[Env] = {
     var acc: List[Env] = List()
     envs.foreach { env =>
@@ -1013,9 +1041,9 @@ final class Occurrence(pipelineContext: PipelineContext) {
       case Unknown :: props =>
         applyProps(props, envs)
       case Pos(x, t) :: props =>
-        applyProps(props, keepBestEnvs(envs.map(updateTypeEnv(_, +, x, t))))
+        applyProps(props, keepBestEnvs(envs.flatMap(updateTypeEnv(_, +, x, t))))
       case Neg(x, t) :: props =>
-        applyProps(props, keepBestEnvs(envs.map(updateTypeEnv(_, -, x, t))))
+        applyProps(props, keepBestEnvs(envs.flatMap(updateTypeEnv(_, -, x, t))))
       case And(ps) :: props =>
         applyProps(ps ++ props, envs)
       case Or(ps) :: props =>
@@ -1023,20 +1051,14 @@ final class Occurrence(pipelineContext: PipelineContext) {
         keepBestEnvs(ps.flatMap((p: Prop) => applyProps(List(p), envs2)))
     }
 
-  private def chooseType(typeEnv: Env, x: String, originalEnv: Env): Type = {
-    // The second isNoneType check is there to reduce unwanted noise when none() is not introduced by refining
-    if (typeEnv.exists { case (s, t) => subtype.isNoneType(t) && !subtype.isNoneType(originalEnv(s)) }) NoneType
-    else typeEnv(x)
-  }
-
-  private def updateTypeEnv(typeEnv: Env, pol: Polarity, obj: Obj, t: Type): Env = {
+  private def updateTypeEnv(typeEnv: Env, pol: Polarity, obj: Obj, t: Type): Option[Env] = {
     val x = objId(obj)
     typeEnv.get(x) match {
       case None =>
-        typeEnv
+        Some(typeEnv)
       case Some(old) =>
         val s = update(old, objPath(obj), pol, t)
-        typeEnv.updated(x, s)
+        if (Subtype.isNoneType(s)) None else Some(typeEnv.updated(x, s))
     }
   }
 
@@ -1066,51 +1088,59 @@ final class Occurrence(pipelineContext: PipelineContext) {
       case (DynamicType, RecordField(fieldName, recName) :: path1) =>
         util
           .getRecord(module, recName)
-          .map(_.fMap(fieldName).tp)
+          .fMap
+          .get(fieldName)
+          .map(_.tp)
           .map(typePathRef(_, path1))
           .getOrElse(DynamicType)
       case (BoundedDynamicType(bound), _) =>
         BoundedDynamicType(typePathRef(bound, path))
       case (UnionType(ts), _) =>
-        UnionType(ts.map(typePathRef(_, path)))
+        subtype.join(ts.map(typePathRef(_, path)))
+      case (InterType(ts), _) =>
+        subtype.inter(ts.toList.map(typePathRef(_, path)))
       case (TupleType(ts), TupleField(index, Some(arity)) :: path1) if ts.size == arity =>
         typePathRef(ts(index), path1)
       case (rTy: RecordType, RecordField(fieldName, recName) :: path1) if rTy.name == recName =>
         util
           .getRecord(rTy.module, rTy.name)
-          .map(_.fMap(fieldName).tp)
+          .fMap
+          .get(fieldName)
+          .map(_.tp)
           .map(typePathRef(_, path1))
           .getOrElse(AnyType)
       case (rTy: RecordType, TupleField(index, Some(arity)) :: path1) =>
-        util.getRecord(rTy.module, rTy.name) match {
-          case Some(recDecl) if recDecl.fields.size + 1 == arity =>
-            val tuple = narrow.asTupleType(rTy, arity).head
-            typePathRef(tuple.argTys(index), path1)
-          case _ => AnyType
-        }
+        val recDecl = util.getRecord(rTy.module, rTy.name)
+        if (recDecl.fields.size + 1 == arity) {
+          val tuple = narrow.asTupleType(rTy, arity).head
+          typePathRef(tuple.argTys(index), path1)
+        } else AnyType
       case (rTy: RefinedRecordType, RecordField(fieldName, recName) :: path1) if rTy.recType.name == recName =>
         if (rTy.fields.contains(fieldName)) {
           typePathRef(rTy.fields(fieldName), path1)
         } else {
           util
             .getRecord(rTy.recType.module, rTy.recType.name)
-            .map(_.fMap(fieldName).tp)
+            .fMap
+            .get(fieldName)
+            .map(_.tp)
             .map(typePathRef(_, path1))
             .getOrElse(AnyType)
         }
       case (rTy: RefinedRecordType, TupleField(index, Some(arity)) :: path1) =>
-        util.getRecord(rTy.recType.module, rTy.recType.name) match {
-          case Some(recDecl) if recDecl.fields.size + 1 == arity =>
-            val tuple = narrow.asTupleType(rTy, arity).head
-            typePathRef(tuple.argTys(index), path1)
-          case _ => AnyType
-        }
+        val recDecl = util.getRecord(rTy.recType.module, rTy.recType.name)
+        if (recDecl.fields.size + 1 == arity) {
+          val tuple = narrow.asTupleType(rTy, arity).head
+          typePathRef(tuple.argTys(index), path1)
+        } else AnyType
       case (MapType(props, _, vTy), MapField(field) :: path1) =>
         val ty = props
           .get(field)
           .map(_.tp)
           .getOrElse(vTy)
         typePathRef(ty, path1)
+      case (mTy: MapType, AnyMapField :: path1) =>
+        typePathRef(narrow.getValType(mTy), path1)
       case (RemoteType(rid, args), path) =>
         val body = util.getTypeDeclBody(rid, args)
         typePathRef(body, path)
@@ -1118,6 +1148,10 @@ final class Occurrence(pipelineContext: PipelineContext) {
         typePathRef(lt, path)
       case (ListType(lt), ListTail :: path) =>
         typePathRef(ListType(lt), path)
+      case (ConsType(h, _), ListHead :: path) =>
+        typePathRef(h, path)
+      case (ConsType(_, tl), ListTail :: path) =>
+        typePathRef(tl, path)
       case _ =>
         AnyType
     }
@@ -1129,4 +1163,16 @@ final class Occurrence(pipelineContext: PipelineContext) {
       case field :: path =>
         FieldObj(field, mkObj(v, path))
     }
+
+  private def nativeRecordTypeFor(modName: String, recName: String): Type =
+    NativeRecordType(RemoteId(modName, recName, 0))
+
+  private def resolveIsRecord2Name(recName: String): Type = {
+    val localNative = Db.getNativeRecord(module, recName).map(_ => module)
+    val importedNative = Db.getNativeRecordImports(module).flatMap(_.get(recName))
+    localNative.orElse(importedNative) match {
+      case Some(definingModule) => nativeRecordTypeFor(definingModule, recName)
+      case None                 => RecordType(recName)(module)
+    }
+  }
 }

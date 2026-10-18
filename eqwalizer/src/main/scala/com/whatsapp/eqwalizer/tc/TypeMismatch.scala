@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -61,7 +65,7 @@ class TypeMismatch(pipelineContext: PipelineContext) {
   import TypeMismatch._
   private lazy val util = pipelineContext.util
   private lazy val subtype = pipelineContext.subtype
-  private lazy val show = new Show(Some(pipelineContext))
+  private lazy val show = new Show(pipelineContext)
 
   def explain(t1: Type, t2: Type): Option[String] = {
     findMismatch(t1, t2, Set()).mismatch match {
@@ -108,8 +112,8 @@ class TypeMismatch(pipelineContext: PipelineContext) {
         val exp = s"${prefix}Context expects type: ${showLimitChars(t2, chars = 60)}"
         List(got, exp).mkString("\n")
       case (ParametersMismatch, ft1: FunType, ft2: FunType) =>
-        val cnt1 = ft1.forall.size
-        val cnt2 = ft2.forall.size
+        val cnt1 = ft1.forall
+        val cnt2 = ft2.forall
         def plural(n: Int): String = if (n != 1) "s" else ""
         val got =
           s"${prefix}Here the type is:     ${showLimitChars(ft1, chars = 40)} with $cnt1 type parameter${plural(cnt1)}"
@@ -297,76 +301,57 @@ class TypeMismatch(pipelineContext: PipelineContext) {
         Details(None, 100)
 
       case (r: RecordType, t: TupleType) =>
-        util.getRecord(r.module, r.name) match {
-          case Some(recDecl) if isRecordCandidate(recDecl, t) =>
-            findMismatch(recordAsTuple(recDecl), t, seen)
-          case _ =>
-            Details(Some(t1, t2, Incompatible), 20)
-        }
+        val recDecl = util.getRecord(r.module, r.name)
+        if (isRecordCandidate(recDecl, t))
+          findMismatch(recordAsTuple(recDecl), t, seen)
+        else
+          Details(Some(t1, t2, Incompatible), 20)
       case (t: TupleType, r: RecordType) =>
-        util.getRecord(r.module, r.name) match {
-          case Some(recDecl) if isRecordCandidate(recDecl, t) =>
-            findMismatch(t, recordAsTuple(recDecl), seen)
-          case _ =>
-            Details(Some(t1, t2, Incompatible), 20)
-        }
+        val recDecl = util.getRecord(r.module, r.name)
+        if (isRecordCandidate(recDecl, t))
+          findMismatch(t, recordAsTuple(recDecl), seen)
+        else
+          Details(Some(t1, t2, Incompatible), 20)
       case (r: RefinedRecordType, t: TupleType) =>
-        util.getRecord(r.recType.module, r.recType.name) match {
-          case Some(recDecl) if isRecordCandidate(recDecl, t) =>
-            findMismatch(refinedRecordAsTuple(recDecl, r), t, seen)
-          case _ =>
-            Details(Some(t1, t2, Incompatible), 20)
-        }
+        val recDecl = util.getRecord(r.recType.module, r.recType.name)
+        if (isRecordCandidate(recDecl, t))
+          findMismatch(refinedRecordAsTuple(recDecl, r), t, seen)
+        else
+          Details(Some(t1, t2, Incompatible), 20)
       case (t: TupleType, r: RefinedRecordType) =>
-        util.getRecord(r.recType.module, r.recType.name) match {
-          case Some(recDecl) if isRecordCandidate(recDecl, t) =>
-            findMismatch(t, refinedRecordAsTuple(recDecl, r), seen)
-          case _ =>
-            Details(Some(t1, t2, Incompatible), 20)
-        }
+        val recDecl = util.getRecord(r.recType.module, r.recType.name)
+        if (isRecordCandidate(recDecl, t))
+          findMismatch(t, refinedRecordAsTuple(recDecl, r), seen)
+        else
+          Details(Some(t1, t2, Incompatible), 20)
       case (refRec: RefinedRecordType, rec: RecordType) if refRec.recType.name == rec.name =>
         Details(None, 100)
       case (rec: RecordType, refRec: RefinedRecordType) if refRec.recType.name == rec.name =>
-        util.getRecord(rec.module, rec.name) match {
-          case Some(recDecl) =>
-            val indexedPairs = refRec.fields.map { case (fieldName, fieldTy) =>
-              ((recDecl.fMap(fieldName).tp, fieldTy), fieldName)
-            }.toList
-            findMismatchWithIndex(indexedPairs) match {
-              case None => Details(None, 100)
-              case Some((fieldTy1, fieldTy2, mismatch, fieldName)) =>
-                val newTy1 = RefinedRecordType(rec, Map(fieldName -> fieldTy1))
-                val newTy2 = RefinedRecordType(rec, Map(fieldName -> fieldTy2))
-                Details(Some(newTy1, newTy2, RecordFieldMismatch(fieldName, mismatch)), 80)
-            }
-          case None =>
-            Details(Some(t1, t2, Incompatible), 20)
+        val recDecl = util.getRecord(rec.module, rec.name)
+        val indexedPairs = refRec.fields.map { case (fieldName, fieldTy) =>
+          ((recDecl.fMap(fieldName).tp, fieldTy), fieldName)
+        }.toList
+        findMismatchWithIndex(indexedPairs) match {
+          case None => Details(None, 100)
+          case Some((fieldTy1, fieldTy2, mismatch, fieldName)) =>
+            val newTy1 = RefinedRecordType(rec, Map(fieldName -> fieldTy1))
+            val newTy2 = RefinedRecordType(rec, Map(fieldName -> fieldTy2))
+            Details(Some(newTy1, newTy2, RecordFieldMismatch(fieldName, mismatch)), 80)
         }
       case (refRec1: RefinedRecordType, refRec2: RefinedRecordType) if refRec1.recType == refRec2.recType =>
         val rec = refRec1.recType
-        util.getRecord(rec.module, rec.name) match {
-          case Some(recDecl) =>
-            val indexedPairs = refRec2.fields.map { case (fieldName, fieldTy2) =>
-              val fieldTy1 = refRec1.fields.getOrElse(fieldName, recDecl.fMap(fieldName).tp)
-              ((fieldTy1, fieldTy2), fieldName)
-            }.toList
-            findMismatchWithIndex(indexedPairs) match {
-              case None => Details(None, 100)
-              case Some((fieldTy1, fieldTy2, mismatch, fieldName)) =>
-                val newTy1 = RefinedRecordType(rec, Map(fieldName -> fieldTy1))
-                val newTy2 = RefinedRecordType(rec, Map(fieldName -> fieldTy2))
-                Details(Some(newTy1, newTy2, RecordFieldMismatch(fieldName, mismatch)), 80)
-            }
-          case None =>
-            Details(Some(t1, t2, Incompatible), 20)
+        val recDecl = util.getRecord(rec.module, rec.name)
+        val indexedPairs = refRec2.fields.map { case (fieldName, fieldTy2) =>
+          val fieldTy1 = refRec1.fields.getOrElse(fieldName, recDecl.fMap(fieldName).tp)
+          ((fieldTy1, fieldTy2), fieldName)
+        }.toList
+        findMismatchWithIndex(indexedPairs) match {
+          case None => Details(None, 100)
+          case Some((fieldTy1, fieldTy2, mismatch, fieldName)) =>
+            val newTy1 = RefinedRecordType(rec, Map(fieldName -> fieldTy1))
+            val newTy2 = RefinedRecordType(rec, Map(fieldName -> fieldTy2))
+            Details(Some(newTy1, newTy2, RecordFieldMismatch(fieldName, mismatch)), 80)
         }
-
-      case (AnyTupleType, TupleType(_)) =>
-        Details(None, 90)
-      case (AnyTupleType, RecordType(_)) =>
-        Details(None, 90)
-      case (AnyTupleType, RefinedRecordType(_, _)) =>
-        Details(None, 90)
 
       case (FunType(_, _, _), AnyFunType) =>
         Details(None, 100)
@@ -467,8 +452,8 @@ class TypeMismatch(pipelineContext: PipelineContext) {
             if (allKeys.isEmpty) 80
             else 40 + 40 * commonKeys.size / allKeys.size
           // Required keys don't match
-          val reqKeys1 = props1.collect { case (k, Prop(true, _)) => k }.toSet
-          val reqKeys2 = props2.collect { case (k, Prop(true, _)) => k }.toSet
+          val reqKeys1 = props1.collect { case (k, MapProp(true, _)) => k }.toSet
+          val reqKeys2 = props2.collect { case (k, MapProp(true, _)) => k }.toSet
           if (!tolerantSubtype && !reqKeys2.subsetOf(reqKeys1)) {
             val missingReqKeys = reqKeys2.removedAll(reqKeys1)
             return Details(Some(t1, t2, MissingReqKeys(missingReqKeys)), score)
@@ -479,8 +464,8 @@ class TypeMismatch(pipelineContext: PipelineContext) {
               case Some(prop2) =>
                 findMismatch(prop1.tp, prop2.tp, seen).mismatch match {
                   case Some((prop1Ty, prop2Ty, mismatch)) =>
-                    val newTy1 = MapType(props1.updated(key1, Prop(prop1.req, prop1Ty)), kT1, vT1)
-                    val newTy2 = MapType(props2.updated(key1, Prop(prop2.req, prop2Ty)), kT2, vT2)
+                    val newTy1 = MapType(props1.updated(key1, MapProp(prop1.req, prop1Ty)), kT1, vT1)
+                    val newTy2 = MapType(props2.updated(key1, MapProp(prop2.req, prop2Ty)), kT2, vT2)
                     boundary.break(Details(Some(newTy1, newTy2, MapPropMismatch(key1, mismatch)), score))
                   case None =>
                 }
@@ -498,7 +483,7 @@ class TypeMismatch(pipelineContext: PipelineContext) {
                       val newTy2 = MapType(props2, newKT2, vT2)
                       boundary.break(Details(Some(t1, newTy2, MapKeyMismatch(key1, mismatch)), score))
                     case (_, Some((newProp1Ty, newVT2, mismatch))) =>
-                      val newTy1 = MapType(props1.updated(key1, Prop(prop1.req, newProp1Ty)), kT1, vT1)
+                      val newTy1 = MapType(props1.updated(key1, MapProp(prop1.req, newProp1Ty)), kT1, vT1)
                       val newTy2 = MapType(props2, kT2, newVT2)
                       boundary.break(Details(Some(newTy1, newTy2, MapPropMismatch(key1, mismatch)), score))
                     case (_, _) =>
@@ -534,7 +519,7 @@ class TypeMismatch(pipelineContext: PipelineContext) {
             mismatchVal match {
               case Some((newVT1, newProp2Ty, mismatch)) =>
                 val newTy1 = MapType(props1, kT1, newVT1)
-                val newTy2 = MapType(props2.updated(key2, Prop(prop2.req, newProp2Ty)), kT2, vT2)
+                val newTy2 = MapType(props2.updated(key2, MapProp(prop2.req, newProp2Ty)), kT2, vT2)
                 boundary.break(Details(Some(newTy1, newTy2, MapPropMismatch(key2, mismatch)), score))
               case _ =>
             }

@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -12,7 +16,8 @@ object Guards {
   sealed trait Test { val pos: Pos }
   case class TestVar(v: String)(val pos: Pos) extends Test
   case class TestAtom(s: String)(val pos: Pos) extends Test
-  case class TestNumber(lit: Option[Int])(val pos: Pos) extends Test
+  case class TestInteger(lit: Option[Int])(val pos: Pos) extends Test
+  case class TestFloat()(val pos: Pos) extends Test
   case class TestTuple(elems: List[Test])(val pos: Pos) extends Test
   case class TestString()(val pos: Pos) extends Test
   case class TestNil()(val pos: Pos) extends Test
@@ -21,6 +26,8 @@ object Guards {
   case class TestRecordCreate(recName: String, fields: List[TestRecordField])(val pos: Pos) extends Test
   case class TestRecordSelect(rec: Test, recName: String, fieldName: String)(val pos: Pos) extends Test
   case class TestRecordIndex(recName: String, fieldName: String)(val pos: Pos) extends Test
+  case class TestNativeRecordSelect(rec: Test, name: Exprs.NativeRecordName, fieldName: String)(val pos: Pos)
+      extends Test
   case class TestMapCreate(kvs: List[(Test, Test)])(val pos: Pos) extends Test
   case class TestMapUpdate(map: Test, kvs: List[(Test, Test)])(val pos: Pos) extends Test
 

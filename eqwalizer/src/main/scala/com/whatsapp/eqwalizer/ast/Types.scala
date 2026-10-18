@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -9,29 +13,23 @@ package com.whatsapp.eqwalizer.ast
 import com.whatsapp.eqwalizer.ast.Exprs.{AtomLit, Expr, Tuple}
 import com.whatsapp.eqwalizer.ast.Forms.RecDecl
 import com.whatsapp.eqwalizer.ast.Guards.{Test, TestAtom, TestTuple}
-import com.github.plokhotnyuk.jsoniter_scala.macros._
+import com.github.plokhotnyuk.jsoniter_scala.macros.*
 import com.github.plokhotnyuk.jsoniter_scala.core.*
+import com.whatsapp.eqwalizer.tc.Subtype
 
 import scala.util.boundary
 
 object Types {
-  extension (forall: List[Int]) {
-    def >(n: Int): Boolean = forall.size > n
-  }
-
   sealed trait Type
   case class AtomLitType(atom: String) extends Type
   case object AnyFunType extends Type
-  case class FunType(forall: List[Int], argTys: List[Type], resTy: Type) extends Type
-  object FunType {
-    def apply(forall: Int, argTys: List[Type], resTy: Type): FunType =
-      new FunType((1 to forall).toList, argTys, resTy)
-  }
+  case class FunType(forall: Int, argTys: List[Type], resTy: Type) extends Type
   case class AnyArityFunType(resTy: Type) extends Type
 
   case object AnyTupleType extends Type
   case class TupleType(argTys: List[Type]) extends Type
   case object NilType extends Type
+  case class ConsType(headT: Type, tailT: Type) extends Type
   case class ListType(t: Type) extends Type
 
   /** prefer `Subtype.join` over `UnionType.apply`
@@ -42,27 +40,50 @@ object Types {
     def apply(tys: Set[Type]): Type = {
       // unions with NoneType are meaningless, we can remove them early
       val types = tys - NoneType
-      types.size match {
-        case 0 => NoneType
-        case 1 => types.head
-        case _ => new UnionType(types)
-      }
+      if (types.contains(AnyType))
+        AnyType
+      else
+        types.size match {
+          case 0 => NoneType
+          case 1 => types.head
+          case _ => new UnionType(types)
+        }
+    }
+  }
+
+  case class InterType(tys: Set[Type]) extends Type
+
+  object InterType {
+    def apply(tys: Set[Type]): Type = {
+      // intersections with AnyType are meaningless, we can remove them early
+      val types = tys - AnyType
+      if (types.contains(NoneType))
+        NoneType
+      else
+        types.size match {
+          case 0 => AnyType
+          case 1 => types.head
+          case _ => new InterType(types)
+        }
     }
   }
 
   case class RemoteType(id: RemoteId, argTys: List[Type]) extends Type
 
-  case class VarType(n: Int)(val name: String) extends Type
   case class BoundVarType(lvl: Int)(val name: String) extends Type
   case class FreeVarType(n: Int)(val name: String) extends Type
   case class RecordType(name: String)(val module: String) extends Type
   case class RefinedRecordType(recType: RecordType, fields: Map[String, Type]) extends Type
-  case class MapType(props: Map[Key, Prop], kType: Type, vType: Type) extends Type
+
+  case class NativeRecordType(id: RemoteId) extends Type
+
+  case object AnyNativeRecordType extends Type
+  case class MapType(props: Map[Key, MapProp], kType: Type, vType: Type) extends Type
 
   object MapType {
-    def apply(props: Map[Key, Prop], kType: Type, vType: Type): MapType = {
+    def apply(props: Map[Key, MapProp], kType: Type, vType: Type): MapType = {
       Key.fromType(kType) match {
-        case Some(key) => new MapType(props + (key -> Prop(req = false, vType)), NoneType, NoneType)
+        case Some(key) => new MapType(props + (key -> MapProp(req = false, vType)), NoneType, NoneType)
         case None =>
           if (kType == NoneType) new MapType(props, NoneType, NoneType)
           else new MapType(props, kType, vType)
@@ -78,7 +99,7 @@ object Types {
     override def toString: String = name
   }
 
-  case class Prop(req: Boolean, tp: Type)
+  case class MapProp(req: Boolean, tp: Type)
 
   case object BinaryType extends Type
   case object AnyType extends Type
@@ -89,15 +110,35 @@ object Types {
   case object PidType extends Type
   case object PortType extends Type
   case object ReferenceType extends Type
-  case object NumberType extends Type
+  case object IntegerType extends Type
+  case object FloatType extends Type
+
+  // AType_* - none() type aware constructors
+  def ConsType_*(headT: Type, tailT: Type): Type =
+    if (Subtype.isNoneType(headT) || Subtype.isNoneType(tailT)) NoneType
+    else ConsType(headT, tailT)
+
+  def TupleType_*(elems: List[Type]): Type =
+    if (elems.exists(Subtype.isNoneType))
+      NoneType
+    else
+      TupleType(elems)
+
+  def MapType_*(props: Map[Types.Key, Types.MapProp], kTy: Type, vTy: Type): Type = {
+    val hasPropEmpty = props.values.exists { case MapProp(req, tp) => req && Subtype.isNoneType(tp) }
+    val propsNonEmpty = props.filter { case (_, MapProp(req, tp)) => req || !Subtype.isNoneType(tp) }
+    if (hasPropEmpty)
+      NoneType
+    else
+      MapType(propsNonEmpty, kTy, vTy)
+  }
 
   private val ioListRid = RemoteId("erlang", "iolist", 0)
 
   val falseType: Type = AtomLitType("false")
   val trueType: Type = AtomLitType("true")
-  val charType: Type = NumberType
-  val byteType: Type = NumberType
-  val floatType: Type = NumberType
+  val charType: Type = IntegerType
+  val byteType: Type = IntegerType
   val undefined: Type = AtomLitType("undefined")
   val exnClassType: Type =
     UnionType(Set(AtomLitType("error"), AtomLitType("exit"), AtomLitType("throw")))
@@ -109,9 +150,10 @@ object Types {
   val builtinTypeAliasBodies: Map[String, Type] = Map(
     "string" -> ListType(charType),
     "boolean" -> UnionType(Set(falseType, trueType)),
-    "timeout" -> UnionType(Set(AtomLitType("infinity"), NumberType)),
+    "number" -> UnionType(Set(IntegerType, FloatType)),
+    "timeout" -> UnionType(Set(AtomLitType("infinity"), IntegerType)),
     "identifier" -> UnionType(Set(PidType, PortType, ReferenceType)),
-    "mfa" -> TupleType(List(AtomType, AtomType, NumberType)),
+    "mfa" -> TupleType(List(AtomType, AtomType, IntegerType)),
     "iolist" -> ListType(UnionType(Set(byteType, BinaryType, RemoteType(ioListRid, Nil)))),
     "iodata" -> UnionType(Set(RemoteType(RemoteId("erlang", "iolist", 0), Nil), BinaryType)),
   )
@@ -121,6 +163,7 @@ object Types {
 
   val stringType: Type = builtinTypeAliases("string")
   val booleanType: Type = builtinTypeAliases("boolean")
+  val numberType: Type = builtinTypeAliases("number")
 
   def join(tys: Set[Type]): Type = {
     def collect(ty: Type): Set[Type] = {
@@ -155,37 +198,33 @@ object Types {
       "nonempty_bitstring" -> BinaryType,
       "byte" -> byteType,
       "char" -> charType,
-      "float" -> floatType,
+      "float" -> FloatType,
       "fun" -> AnyFunType,
       "function" -> AnyFunType,
       "maybe_improper_list" -> ListType(AnyType),
       "nonempty_maybe_improper_list" -> ListType(AnyType),
-      "pos_integer" -> NumberType,
-      "neg_integer" -> NumberType,
-      "non_neg_integer" -> NumberType,
-      "integer" -> NumberType,
+      "pos_integer" -> IntegerType,
+      "neg_integer" -> IntegerType,
+      "non_neg_integer" -> IntegerType,
+      "integer" -> IntegerType,
       "nil" -> NilType,
       "none" -> NoneType,
-      "number" -> NumberType,
       "pid" -> PidType,
       "port" -> PortType,
       "reference" -> ReferenceType,
       "term" -> AnyType,
       "tuple" -> AnyTupleType,
-      "arity" -> NumberType,
+      "record" -> AnyNativeRecordType,
+      "arity" -> IntegerType,
       "module" -> AtomType,
       "node" -> AtomType,
       "no_return" -> NoneType,
       "nonempty_string" -> stringType,
     ) ++ builtinTypeAliases
 
-  implicit val keyCodec: JsonKeyCodec[Key] = new JsonKeyCodec[Key] {
-    override def decodeKey(in: JsonReader): Key = Key.fromString(in.readKeyAsString())
-    override def encodeKey(x: Key, out: JsonWriter): Unit = out.writeKey(x.toString)
-  }
-
   implicit val codec: JsonValueCodec[Type] = JsonCodecMaker.make(
     CodecMakerConfig
+      .withMapAsArray(true)
       .withMapMaxInsertNumber(65536)
       .withSetMaxInsertNumber(65536)
       .withAllowRecursiveTypes(true)
@@ -194,33 +233,6 @@ object Types {
   )
 
   object Key {
-    def fromString(s: String): Key = {
-      def splitTuple(body: String): List[String] = {
-        if (body.isEmpty) Nil
-        else {
-          var depth = 0
-          var start = 0
-          var parts = List.empty[String]
-          for ((ch, i) <- body.zipWithIndex) {
-            ch match {
-              case '{' => depth += 1
-              case '}' => depth -= 1
-              case ',' if depth == 0 =>
-                parts = parts :+ body.substring(start, i).trim
-                start = i + 1
-              case _ =>
-            }
-          }
-          parts :+ body.substring(start).trim
-        }
-      }
-
-      val trimmed = s.trim
-      if (trimmed.startsWith("{") && trimmed.endsWith("}"))
-        TupleKey(splitTuple(trimmed.substring(1, trimmed.length - 1)).map(fromString))
-      else AtomKey(trimmed)
-    }
-
     def asType(k: Key): Type = {
       k match {
         case TupleKey(keys) => TupleType(keys.map(asType))

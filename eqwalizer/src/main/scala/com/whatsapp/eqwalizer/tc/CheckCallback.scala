@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -13,7 +17,6 @@ import com.whatsapp.eqwalizer.tc.TcDiagnostics._
 
 class CheckCallback(pipelineContext: PipelineContext) {
   private lazy val subtype = pipelineContext.subtype
-  private lazy val narrow = pipelineContext.narrow
   private implicit val pipelineCtx: PipelineContext = pipelineContext
 
   def checkImpl(module: String, b: Behaviour, cb: Callback, isOptional: Boolean): Option[TypeError] =
@@ -30,9 +33,9 @@ class CheckCallback(pipelineContext: PipelineContext) {
           val badParamOpt = impl.argTys.zipWithIndex.find { case (implArgTy, index) =>
             !cb.tys.exists { case FunType(_, cbArgTys, _) =>
               val cbArgTy = cbArgTys(index)
-              val approxMeet = narrow.meet(implArgTy, cbArgTy)
+              val approxMeet = subtype.meet(implArgTy, cbArgTy)
               val hasOverlap =
-                subtype.isNoneType(implArgTy) || subtype.isNoneType(cbArgTy) || !subtype.isNoneType(approxMeet)
+                Subtype.isNoneType(implArgTy) || Subtype.isNoneType(cbArgTy) || !Subtype.isNoneType(approxMeet)
               hasOverlap
             }
           }

@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -9,29 +13,20 @@ package com.whatsapp.eqwalizer.ast
 import com.whatsapp.eqwalizer.ast.Types._
 
 enum Specifier {
-  case SignedIntegerSpecifier,
-    UnsignedIntegerSpecifier,
-    FloatSpecifier,
-    BinarySpecifier,
-    BytesSpecifier,
-    BitstringSpecifier,
-    BitsSpecifier,
-    Utf8Specifier,
-    Utf16Specifier,
-    Utf32Specifier
+  case SignedInteger, UnsignedInteger, Float, Binary, Bytes, Bitstring, Bits, Utf8, Utf16, Utf32
 }
 
 object Specifier {
   def expType(s: Specifier, stringLiteral: Boolean): Type =
     s match {
-      case UnsignedIntegerSpecifier | Utf8Specifier | Utf16Specifier | Utf32Specifier =>
+      case UnsignedInteger | Utf8 | Utf16 | Utf32 =>
         if (stringLiteral) stringType
-        else NumberType
-      case SignedIntegerSpecifier =>
-        NumberType
-      case FloatSpecifier =>
-        floatType
-      case BinarySpecifier | BytesSpecifier | BitstringSpecifier | BitsSpecifier =>
+        else IntegerType
+      case SignedInteger =>
+        IntegerType
+      case Float =>
+        FloatType
+      case Binary | Bytes | Bitstring | Bits =>
         BinaryType
     }
 }

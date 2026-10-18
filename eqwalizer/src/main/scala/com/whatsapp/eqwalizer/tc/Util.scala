@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -14,6 +18,7 @@ import com.whatsapp.eqwalizer.ast.{Id, RemoteId, Subst}
 class Util(pipelineContext: PipelineContext) {
   private val module = pipelineContext.module
   private var recordCache: Map[(String, String), Option[RecDecl]] = Map.empty
+  private var nativeRecordCache: Map[(String, String), Option[NativeRecDecl]] = Map.empty
 
   private lazy val privateConstructorOwners: Map[String, Set[String]] =
     pipelineContext.options.privateConstructorOwners
@@ -30,7 +35,12 @@ class Util(pipelineContext: PipelineContext) {
   def getFunType(module: String, id: Id): FunType =
     getFunType(globalFunId(module, id))
 
-  def getRecord(module: String, name: String): Option[RecDecl] = {
+  def getRecord(module: String, name: String): RecDecl =
+    getRecordOpt(module, name).getOrElse(
+      sys.error(s"Cannot fetch record #$name{} from module $module. Current module: ${this.module}")
+    )
+
+  private def getRecordOpt(module: String, name: String): Option[RecDecl] =
     if (recordCache.contains((module, name))) {
       recordCache((module, name))
     } else {
@@ -38,10 +48,35 @@ class Util(pipelineContext: PipelineContext) {
       recordCache += ((module, name) -> recDecl)
       recDecl
     }
+
+  def isRecordDefined(module: String, name: String, arity: Int): Boolean =
+    getRecordOpt(module, name) match {
+      case Some(recDecl) =>
+        recDecl.fields.size == (arity - 1)
+      case None =>
+        false
+    }
+
+  def getNativeRecord(module: String, name: String): Option[NativeRecDecl] = {
+    if (nativeRecordCache.contains((module, name))) {
+      nativeRecordCache((module, name))
+    } else {
+      val decl = Db.getNativeRecord(module, name)
+      nativeRecordCache += ((module, name) -> decl)
+      decl
+    }
   }
 
-  def getRecordArity(module: String, name: String): Option[Int] = {
-    getRecord(module, name).map(_.fields.size)
+  def checkNativeRecordVisibility(id: RemoteId, decl: NativeRecDecl, pos: com.whatsapp.eqwalizer.ast.Pos): Unit = {
+    if (id.module != module && !decl.exported) {
+      pipelineContext.diagnosticsInfo.add(
+        com.whatsapp.eqwalizer.tc.TcDiagnostics.NonExportedNativeRecord(pos, id.module, id.name)
+      )
+    }
+  }
+
+  def getRecordArity(module: String, name: String): Int = {
+    getRecord(module, name).fields.size
   }
 
   def getFunType(fqn: RemoteId): FunType = {
@@ -76,20 +111,24 @@ class Util(pipelineContext: PipelineContext) {
         return DynamicType
       case RemoteId("eqwalizer", "dynamic", 1) =>
         return BoundedDynamicType(args.head)
+      case RemoteId("eqwalizer", "inter", 2) =>
+        return InterType(args.toSet)
       case _ =>
     }
     val id = Id(remoteId.name, remoteId.arity)
     def applyType(decl: TypeDecl): Type =
       if (id.arity == 0) decl.body
       else {
-        val subst = decl.params.zip(args).map { case (VarType(n), ty) => n -> ty }.toMap
+        val subst = decl.params.zip(args).map { case (FreeVarType(n), ty) => n -> ty }.toMap
         Subst.subst(subst, decl.body)
       }
 
     Db
       .getType(remoteId.module, id)
       .map(applyType)
-      .get // A non-defined type should fail during stubs validation
+      // A non-defined type should fail during stubs validation,
+      // but we want to get the details in case if something goes wrong.
+      .getOrElse(sys.error(s"module: $module, typeId: $remoteId"))
   }
 
   def flattenUnions(ty: Type): List[Type] = ty match {
@@ -115,6 +154,8 @@ class Util(pipelineContext: PipelineContext) {
       isFunType(body, arity)
     case UnionType(tys) =>
       tys.forall(isFunType(_, arity))
+    case InterType(tys) =>
+      tys.exists(isFunType(_, arity))
     case BoundedDynamicType(_) => true
     case _                     => false
   }

@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -13,12 +17,10 @@ import com.whatsapp.eqwalizer.ast.Types.{DynamicType, FunType, Type}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.NoSpecialType
 
 class ElabApplyOverloaded(pipelineContext: PipelineContext) {
-  private lazy val check = pipelineCtx.check
   private lazy val elab = pipelineContext.elab
   private lazy val util = pipelineContext.util
   private lazy val subtype = pipelineContext.subtype
   private val elabApply = pipelineContext.elabApply
-  private val narrow = pipelineContext.narrow
   private lazy val instantiate = pipelineContext.instantiate
   private lazy val typeInfo = pipelineContext.typeInfo
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
@@ -45,7 +47,7 @@ class ElabApplyOverloaded(pipelineContext: PipelineContext) {
   private def toFunType(depFunSpec: OverloadedFunSpec): Option[FunType] = {
     // If a sub-spec has generic vars, - transforming it to a FunType is tricky in general case.
     // Skipping overloaded specs with generic vars for now (for simplicity).
-    if (depFunSpec.tys.forall(_.forall.isEmpty)) {
+    if (depFunSpec.tys.forall(_.forall == 0)) {
       val result = depFunSpec.tys.reduce { (acc, elem) =>
         val argTys = acc.argTys.zip(elem.argTys).map { case (t1, t2) => subtype.join(t1, t2) }
         FunType(0, argTys, DynamicType)
@@ -55,8 +57,8 @@ class ElabApplyOverloaded(pipelineContext: PipelineContext) {
   }
 
   private def mayOverlap(t1: Type, t2: Type): Boolean = {
-    val approxMeet = narrow.meet(t1, t2)
-    !subtype.isNoneType(approxMeet)
+    val approxMeet = subtype.meet(t1, t2)
+    !Subtype.isNoneType(approxMeet)
   }
 
   private def selectFunTypes(depFunSpec: OverloadedFunSpec, argTys: List[Type]): List[FunType] =

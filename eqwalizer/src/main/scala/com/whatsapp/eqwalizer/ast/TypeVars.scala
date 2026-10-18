@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -15,15 +19,14 @@ object TypeVars {
     private var shift = 0
 
     def instantiate(ft: FunType): (List[Var], FunType) =
-      if (ft.forall.isEmpty) (Nil, ft)
+      if (ft.forall == 0) (Nil, ft)
       else {
-        val oldVars = ft.forall
-        val newVars = (shift until (shift + oldVars.size)).toList
-        val subst = oldVars.lazyZip(newVars).toMap
-        val res = FunType(Nil, ft.argTys.map(substVars(subst)), substVars(subst)(ft.resTy))
-        shift = shift + oldVars.size
+        val newVars = (shift until (shift + ft.forall)).toList
+        val res = FunType(0, ft.argTys.map(substLevels(shift)), substLevels(shift)(ft.resTy))
+        shift = shift + ft.forall
         (newVars, res)
       }
+
   }
 
   enum ElimMode {
@@ -41,7 +44,6 @@ object TypeVars {
   }
 
   def freeVars(ty: Type): Set[Var] = ty match {
-    case VarType(n)     => Set(n)
     case FreeVarType(n) => Set(n)
     case _              => children(ty).flatMap(freeVars).toSet
   }
@@ -53,53 +55,55 @@ object TypeVars {
     case AnyArityFunType(resTy)       => resTy :: Nil
     case TupleType(argTys)            => argTys
     case UnionType(tys)               => tys.toList
+    case InterType(tys)               => tys.toList
     case RemoteType(_, tys)           => tys
     case MapType(props, kType, vType) => kType :: vType :: props.values.map(_.tp).toList
     case ListType(ty)                 => ty :: Nil
+    case ConsType(headT, tailT)       => headT :: tailT :: Nil
     case RefinedRecordType(_, fields) => fields.toList.map(_._2)
     case BoundedDynamicType(bound)    => bound :: Nil
     case _                            => Nil
   }
 
   def conformForalls(ft1: FunType, ft2: FunType): Option[(FunType, FunType)] =
-    if (ft1.forall.size != ft2.forall.size || ft1.argTys.size != ft2.argTys.size) None
+    if (ft1.forall != ft2.forall || ft1.argTys.size != ft2.argTys.size) None
     else Some(ft1, ft2)
 
-  private def substVars(subst: Map[Var, Var])(t: Type): Type = t match {
-    case vt: VarType =>
-      subst.get(vt.n).map(n => VarType(n)(vt.name)).getOrElse(vt)
-    case vt: FreeVarType =>
-      subst.get(vt.n).map(n => FreeVarType(n)(vt.name)).getOrElse(vt)
+  private def substLevels(shift: Int)(t: Type): Type = t match {
     case bv: BoundVarType =>
-      subst.get(bv.lvl).map(n => VarType(n)(bv.name)).getOrElse(bv)
+      FreeVarType(bv.lvl + shift)(bv.name)
     case FunType(forall, args, resType) =>
-      FunType(forall, args.map(substVars(subst)), substVars(subst)(resType))
+      assert(forall == 0, "There should be no nested forall")
+      FunType(forall, args.map(substLevels(shift)), substLevels(shift)(resType))
     case AnyArityFunType(resType) =>
-      AnyArityFunType(substVars(subst)(resType))
+      AnyArityFunType(substLevels(shift)(resType))
     case TupleType(params) =>
-      TupleType(params.map(substVars(subst)))
+      TupleType(params.map(substLevels(shift)))
     case ListType(elemT) =>
-      ListType(substVars(subst)(elemT))
+      ListType(substLevels(shift)(elemT))
+    case ConsType(headT, tailT) =>
+      ConsType(substLevels(shift)(headT), substLevels(shift)(tailT))
     case UnionType(params) =>
-      UnionType(params.map(substVars(subst)))
+      UnionType(params.map(substLevels(shift)))
+    case InterType(params) =>
+      InterType(params.map(substLevels(shift)))
     case RemoteType(id, params) =>
-      RemoteType(id, params.map(substVars(subst)))
+      RemoteType(id, params.map(substLevels(shift)))
     case MapType(props, kt, vt) =>
       MapType(
-        props.map { case (key, Prop(req, tp)) => (key, Prop(req, substVars(subst)(tp))) },
-        substVars(subst)(kt),
-        substVars(subst)(vt),
+        props.map { case (key, MapProp(req, tp)) => (key, MapProp(req, substLevels(shift)(tp))) },
+        substLevels(shift)(kt),
+        substLevels(shift)(vt),
       )
     case RefinedRecordType(recType, fields) =>
-      RefinedRecordType(recType, fields.map(f => f._1 -> substVars(subst)(f._2)))
+      RefinedRecordType(recType, fields.map(f => f._1 -> substLevels(shift)(f._2)))
     case BoundedDynamicType(bound) =>
-      BoundedDynamicType(substVars(subst)(bound))
+      BoundedDynamicType(substLevels(shift)(bound))
     case _ =>
       t
   }
 
   private def containsVars(ty: Type, tv: Set[Var]): Boolean = ty match {
-    case VarType(n)     => tv(n)
     case FreeVarType(n) => tv(n)
     case ty             => TypeVars.children(ty).exists(containsVars(_, tv))
   }
@@ -123,8 +127,12 @@ object TypeVars {
         TupleType(params.map(elim))
       case ListType(elemT) =>
         ListType(elim(elemT))
+      case ConsType(headT, tailT) =>
+        ConsType(elim(headT), elim(tailT))
       case UnionType(params) =>
         UnionType(params.map(elim))
+      case InterType(params) =>
+        InterType(params.map(elim))
       case RemoteType(id, params) =>
         val variances = Variance.paramVariances(id)
         val elimmedParams = params.lazyZip(variances).map {
@@ -135,16 +143,12 @@ object TypeVars {
             else param
         }
         RemoteType(id, elimmedParams)
-      case VarType(v) if vars.contains(v) =>
-        mode.toType
       case FreeVarType(v) if vars.contains(v) =>
         mode.toType
-      case vt: VarType =>
-        vt
       case vt: FreeVarType =>
         vt
       case MapType(props, kt, vt) =>
-        MapType(props.map { case (key, Prop(req, tp)) => (key, Prop(req, elim(tp))) }, elim(kt), elim(vt))
+        MapType(props.map { case (key, MapProp(req, tp)) => (key, MapProp(req, elim(tp))) }, elim(kt), elim(vt))
       case BoundedDynamicType(bound) =>
         BoundedDynamicType(elim(bound))
       case _ =>
