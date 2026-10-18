@@ -1,3 +1,13 @@
+> Upgrade note (2026-10-18): the features described below are on `main`; the
+> branch name and ELP `3a65019` compatibility details are historical. The upgrade
+> branch targets ELP `2026-10-14` (`b36ba37346a8e6122fd309420cb67886ccc5871c`).
+> See [the upgrade report](docs/upstream-upgrade-2026-10-14.md) and `make test`.
+> Product-space guard refinement remains unsupported; the later sentence claiming
+> support for guards in that path is inaccurate. Numeric types now follow upstream's
+> separate integer/float model; new intersection, cons, and native-record forms
+> remain outside the custom checker's supported subset and skip conservatively
+> unless a supported catch-all proves coverage.
+
 # Project status: exhaustive case checking
 
 Branch:

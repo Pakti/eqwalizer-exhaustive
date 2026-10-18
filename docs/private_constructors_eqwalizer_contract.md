@@ -1,3 +1,8 @@
+> Historical design note: the active implementation uses Scala-side source comments,
+> not the attributes shown below. Use `% eqwalizer_strict:private_constructor owner`
+> immediately before `-record(...)`. No ELP converter change is required.
+> See [the upgrade report](upstream-upgrade-2026-10-14.md).
+
 # eqWAlizer private constructors - local attribute contract
 
 This note describes the contract expected by the Scala-side implementation in
