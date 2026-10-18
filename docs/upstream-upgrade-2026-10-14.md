@@ -2,8 +2,12 @@
 
 ## Scope and provenance
 
-- Fork starting point: `a214469c9601bf8b58f6af439936e2e9978ab03a` (`origin/main`).
-- Upgrade branch: `upgrade/elp-2026-10-14`. Existing history is preserved.
+- Initial fork starting point: `a214469c9601bf8b58f6af439936e2e9978ab03a`.
+- Corrected fork starting point: `353831ebdf45bd3d0f264d8ffd3cac6d9d83aa45`
+  (`origin/main`, supplied after the first upgrade).
+- Current upgrade branch: `upgrade/elp-2026-10-14-corrected-main`. It merges the
+  corrected fork tip into the completed upgrade, preserving both histories. The
+  original `upgrade/elp-2026-10-14` remains unchanged at `9b548cfb` for comparison.
 - Upstream: `WhatsApp/erlang-language-platform`, tag `2026-10-14`, exact commit
   `b36ba37346a8e6122fd309420cb67886ccc5871c`.
 - Imported subtree: `eqwalizer/`, whose tree is
@@ -15,6 +19,30 @@
 
 No Rust/ELP application code was imported or modified. All production Scala and
 support-library changes are local to the standalone eqWAlizer repository.
+
+## Reconciliation with the corrected main branch
+
+After the initial upgrade, the maintainer pushed previously local work as
+`353831eb`. Its net changes touch 14 files: the Makefile JAR name, type-declaration
+tuple/variance replies, AST forms, counted `forall`, bound/free variables, map
+encoding, substitution/variance/constraints, and their application/subtype consumers.
+These changes already match the direction of the October target; the completed
+upgrade already contains their behavior. No additional production-code changes
+were needed after reviewing every file in that delta.
+
+The reconciliation uses a normal merge, making `353831eb` an actual ancestor of
+the corrected upgrade. Five files conflicted: Forms, TypeVars, Constraints,
+ElabApply and Subtype. Resolution retains the October implementation, including
+native records, cons/intersection traversal and MapProp, and the equivalent
+nonzero-forall checks. The old explicit equal-free-variable constraint case is
+unnecessary because the target accepts equality in its subtype fast path.
+
+Two additional regressions verify that supplied variance metadata is decoded
+from the type-declaration tuple rather than recomputed, and that equal unsolved
+free variables still satisfy constraints while unequal ones do not. Production
+sources, build configuration and Make targets are identical to the first
+completed upgrade. The initial history investigation below remains valid; its
+starting-point references describe that first pass.
 
 ## History investigation and integration strategy
 
@@ -110,7 +138,7 @@ old serialization backports alongside the new implementation.
 Validated on Linux with Java 21:
 
 ```sh
-make test        # 56 Scala tests, all passed
+make test        # 58 Scala tests, all passed after corrected-main reconciliation
 make smoke       # builds JAR, then 5 synthetic process/IPC tests, all passed
 make jar-path    # eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar
 ```
