@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer
@@ -96,7 +100,7 @@ object Pipeline {
     FunSpec(f.id, FunType(0, List.fill(f.id.arity)(DynamicType), DynamicType))
 
   private def checkFun(ctx: PipelineContext, f: FunDecl, spec: FunSpec): List[Diagnostic] = {
-    ctx.check.checkFun(f, spec)
+    ctx.elab.checkFun(f, spec)
     if (ctx.exhaustiveCaseChecking) ctx.exhaustiveCase.checkFun(f, spec)
     ctx.diagnosticsInfo.popErrors()
   }
@@ -106,7 +110,7 @@ object Pipeline {
       f: FunDecl,
       overloadedSpec: OverloadedFunSpec,
   ): List[Diagnostic] = {
-    ctx.check.checkOverloadedFun(f, overloadedSpec)
+    ctx.elab.checkOverloadedFun(f, overloadedSpec)
     ctx.diagnosticsInfo.popErrors()
   }
 

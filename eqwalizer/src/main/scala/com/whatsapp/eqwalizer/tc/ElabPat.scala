@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -9,14 +13,20 @@ package com.whatsapp.eqwalizer.tc
 import com.whatsapp.eqwalizer.ast.Specifier
 import com.whatsapp.eqwalizer.ast.Pats._
 import com.whatsapp.eqwalizer.ast.Types._
-import com.whatsapp.eqwalizer.tc.TcDiagnostics.{UnboundRecord, UnhandledOp}
+import com.whatsapp.eqwalizer.ast.Exprs.NativeRecordName
+import com.whatsapp.eqwalizer.tc.TcDiagnostics.{
+  UnboundNativeRecord,
+  UndefinedAnonNativeRecordField,
+  UndefinedNativeRecordField,
+  UnhandledOp,
+}
 
 final class ElabPat(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
   private lazy val narrow = pipelineContext.narrow
   private lazy val subtype = pipelineContext.subtype
   private lazy val util = pipelineContext.util
-  private lazy val check = pipelineContext.check
+  private lazy val elab = pipelineContext.elab
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private lazy val typeInfo = pipelineContext.typeInfo
 
@@ -37,22 +47,22 @@ final class ElabPat(pipelineContext: PipelineContext) {
         (t, env)
       case PatVar(v) =>
         val patType = env.get(v) match {
-          case Some(vt) => narrow.meet(t, vt)
+          case Some(vt) => subtype.meet(t, vt)
           case None     => t
         }
         typeInfo.add(pat.pos, patType)
         (patType, env + (v -> patType))
       case PatAtom(s) =>
-        val patType = narrow.meet(t, AtomLitType(s))
+        val patType = subtype.meet(t, AtomLitType(s))
         (patType, env)
       case PatInt() =>
-        val patType = narrow.meet(t, NumberType)
+        val patType = subtype.meet(t, IntegerType)
         (patType, env)
-      case PatNumber() =>
-        val patType = narrow.meet(t, NumberType)
+      case PatFloat() =>
+        val patType = subtype.meet(t, FloatType)
         (patType, env)
       case PatString() =>
-        val patType = narrow.meet(t, stringType)
+        val patType = subtype.meet(t, stringType)
         (patType, env)
       case PatTuple(elems) =>
         val arity = elems.size
@@ -68,13 +78,13 @@ final class ElabPat(pipelineContext: PipelineContext) {
               envAcc = env1
               patType
             }
-            if (patTypes.exists(subtype.isNoneType)) (NoneType, envAcc.keys.map(_ -> NoneType).toMap)
+            if (patTypes.exists(Subtype.isNoneType)) (NoneType, envAcc.keys.map(_ -> NoneType).toMap)
             else (TupleType(patTypes), envAcc)
           }
         val (tys, envs) = tyEnvPairs.unzip
         (subtype.join(tys), subtype.joinEnvs(envs))
       case PatNil() =>
-        val patType = narrow.meet(t, NilType)
+        val patType = subtype.meet(t, NilType)
         (patType, env)
       case PatCons(hPat, tPat) =>
         narrow.asListType(t) match {
@@ -85,10 +95,10 @@ final class ElabPat(pipelineContext: PipelineContext) {
           case Some(ListType(elemType)) =>
             val (hType, env1) = elabPat(hPat, elemType, env)
             val (tType, env2) = elabPat(tPat, ListType(elemType), env1)
-            narrow.asListType(tType) match {
-              case Some(ListType(refinedT)) => (ListType(subtype.join(hType, refinedT)), env2)
-              case None                     => (AnyType, env2)
-            }
+            if (Subtype.isNoneType(hType) || Subtype.isNoneType(tType))
+              (NoneType, env2)
+            else
+              (ConsType(hType, tType), env2)
         }
       case PatMatch(p1: PatVar, p2) =>
         val (t2, env1) = elabPat(p2, t, env)
@@ -101,24 +111,20 @@ final class ElabPat(pipelineContext: PipelineContext) {
       case binOp: PatBinOp =>
         elabBinOp(binOp, t, env)
       case PatBinary(elems) =>
-        val patType = narrow.meet(t, BinaryType)
+        val patType = subtype.meet(t, BinaryType)
         var envAcc = env
         for { elem <- elems } {
           envAcc = elabBinaryElem(elem, envAcc)
         }
         (patType, envAcc)
       case PatRecordIndex(_, _) =>
-        val patType = narrow.meet(t, NumberType)
+        val patType = subtype.meet(t, IntegerType)
         (patType, env)
+      case p: PatNativeRecord =>
+        elabPatNativeRecord(p, t, env)
       case PatRecord(recName, namedFields, genFieldOpt) =>
-        val recType = narrow.meet(t, RecordType(recName)(module))
-        val recDecl =
-          util.getRecord(module, recName) match {
-            case Some(recDecl) => recDecl
-            case None =>
-              diagnosticsInfo.add(UnboundRecord(pat.pos, recName))
-              return (DynamicType, env)
-          }
+        val recType = subtype.meet(t, RecordType(recName)(module))
+        val recDecl = util.getRecord(module, recName)
         var envAcc = env
         var refinedFields: Map[String, Type] = Map.empty
         for (namedField <- namedFields) {
@@ -140,7 +146,7 @@ final class ElabPat(pipelineContext: PipelineContext) {
             }
           case None =>
         }
-        if (refinedFields.values.exists(subtype.isNoneType) || subtype.isNoneType(recType))
+        if (refinedFields.values.exists(Subtype.isNoneType) || Subtype.isNoneType(recType))
           (NoneType, envAcc.keys.map(_ -> NoneType).toMap)
         else
           (RefinedRecordType(RecordType(recName)(module), refinedFields), envAcc)
@@ -158,7 +164,7 @@ final class ElabPat(pipelineContext: PipelineContext) {
             case _ =>
               val keyTy = subtype.join(mapTypes.map(narrow.getKeyType))
               val valTy = subtype.join(mapTypes.map(narrow.getValType))
-              val env1 = pipelineContext.elabGuard.elabTestT(keyTest, keyTy, envAcc)
+              val env1 = pipelineContext.occurrence.valueEnv(keyTest, keyTy, envAcc)
               val (_, env2) = elabPat(valPat, valTy, env1)
               envAcc = env2
           }
@@ -169,7 +175,7 @@ final class ElabPat(pipelineContext: PipelineContext) {
 
   private def elabBinaryElem(elem: PatBinaryElem, env: Env): Env = {
     for (eSize <- elem.size)
-      check.checkExpr(eSize, NumberType, env)
+      elab.elabExpr(eSize, env, IntegerType)
     val isStringLiteral = elem.pat.isInstanceOf[PatString]
     val expType = Specifier.expType(elem.specifier, isStringLiteral)
     val (_, env1) = elabPat(elem.pat, expType, env)
@@ -179,20 +185,21 @@ final class ElabPat(pipelineContext: PipelineContext) {
   private def elabUnOp(pat: PatUnOp, t: Type, env: Env): (Type, Env) = {
     val PatUnOp(op, arg) = pat
     op match {
-      case "+" | "-" | "bnot" =>
-        val (_, env1) = elabPat(arg, NumberType, env)
-        (NumberType, env1)
-      case _ => throw UnhandledOp(pat.pos, op)
+      case "bnot"    => (IntegerType, env)
+      case "+" | "-" => (numberType, env)
+      case _         => throw UnhandledOp(pat.pos, op)
     }
   }
 
   private def elabBinOp(binOp: PatBinOp, t: Type, env: Env): (Type, Env) = {
     val PatBinOp(op, arg1, arg2) = binOp
     op match {
-      case "/" | "*" | "-" | "+" | "div" | "rem" | "band" | "bor" | "bxor" | "bsl" | "bsr" =>
-        val (_, env1) = elabPat(arg1, NumberType, env)
-        val (_, env2) = elabPat(arg2, NumberType, env1)
-        (NumberType, env2)
+      case "div" | "rem" | "band" | "bor" | "bxor" | "bsl" | "bsr" =>
+        (IntegerType, env)
+      case "/" =>
+        (FloatType, env)
+      case "*" | "-" | "+" =>
+        (numberType, env)
       case "++" =>
         val asListT = narrow.asListType(t).getOrElse(NoneType)
         val (arg1Ty, env1) = elabPat(arg1, asListT, env)
@@ -205,6 +212,92 @@ final class ElabPat(pipelineContext: PipelineContext) {
       case ">" | "<" | "/=" | ">=" | "=<" | "=/=" | "=:=" | "==" =>
         (booleanType, env)
       case _ => throw UnhandledOp(binOp.pos, op)
+    }
+  }
+
+  private def elabPatNativeRecord(pat: PatNativeRecord, t: Type, env: Env): (Type, Env) = {
+    pat.name match {
+      case NativeRecordName.Anon =>
+        val (concretes, anyDyn) = narrow.asNativeRecordTypes(t)
+        if (concretes.isEmpty) {
+          var envAcc = env
+          for (f <- pat.fields) {
+            val (_, e1) = elabPat(f.pat, DynamicType, envAcc)
+            envAcc = e1
+          }
+          (if (anyDyn) DynamicType else NoneType, envAcc)
+        } else {
+          // Anon patterns never name the record, so a fieldless #_{} is a pure
+          // tag match and requires no export. Only gate visibility on fields.
+          if (pat.fields.nonEmpty) {
+            for (nrt <- concretes) {
+              util.getNativeRecord(nrt.id.module, nrt.id.name).foreach { decl =>
+                util.checkNativeRecordVisibility(nrt.id, decl, pat.pos)
+              }
+            }
+          }
+          val resolved: Map[String, List[Type]] =
+            pat.fields
+              .map(_.name)
+              .distinct
+              .map { fieldName =>
+                fieldName -> concretes.toList.flatMap { nrt =>
+                  util.getNativeRecord(nrt.id.module, nrt.id.name).flatMap { decl =>
+                    decl.fMap.get(fieldName).map { fieldDecl =>
+                      fieldDecl.tp
+                    }
+                  }
+                }
+              }
+              .toMap
+
+          var envAcc = env
+          for (f <- pat.fields) {
+            val fieldTys = resolved.getOrElse(f.name, Nil)
+            val expected =
+              if (fieldTys.isEmpty && anyDyn) DynamicType
+              else if (fieldTys.isEmpty) {
+                diagnosticsInfo.add(
+                  UndefinedAnonNativeRecordField(f.pat.pos, f.name)
+                )
+                DynamicType
+              } else subtype.join(fieldTys.toSet)
+            val (_, e1) = elabPat(f.pat, expected, envAcc)
+            envAcc = e1
+          }
+          val resultTys: Set[Type] = concretes.toSet[Type] ++ (if (anyDyn) Set(DynamicType) else Set.empty)
+          (subtype.join(resultTys), envAcc)
+        }
+      case NativeRecordName.Qualified(id) =>
+        util.getNativeRecord(id.module, id.name) match {
+          case None =>
+            diagnosticsInfo.add(UnboundNativeRecord(pat.pos, id.module, id.name))
+            (DynamicType, env)
+          case Some(decl) =>
+            // A bare tag match (#mod:rec{} with no field patterns) does not
+            // touch the record's fields, so it does not require the record to
+            // be exported. Only gate visibility when fields are matched.
+            if (pat.fields.nonEmpty)
+              util.checkNativeRecordVisibility(id, decl, pat.pos)
+            val refinedType = subtype.meet(t, NativeRecordType(id))
+
+            var envAcc = env
+            for (f <- pat.fields) {
+              decl.fMap.get(f.name) match {
+                case None =>
+                  diagnosticsInfo.add(UndefinedNativeRecordField(f.pat.pos, id.module, id.name, f.name))
+                  val (_, e1) = elabPat(f.pat, DynamicType, envAcc)
+                  envAcc = e1
+                case Some(fieldDecl) =>
+                  val (_, e1) = elabPat(f.pat, fieldDecl.tp, envAcc)
+                  envAcc = e1
+              }
+            }
+            if (Subtype.isNoneType(refinedType))
+              (NoneType, envAcc.keys.map(_ -> NoneType).toMap)
+            else
+              (refinedType, envAcc)
+        }
     }
   }
 }

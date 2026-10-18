@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -26,7 +30,7 @@ object Variance {
     case FreeVarType(n) if tv == n =>
       if (isPositivePosition) Covariant
       else Contravariant
-    case FunType(_, argTys, resTy) =>
+    case FunType(forall, argTys, resTy) =>
       val variancesInArgTys = argTys.map(varianceOf(_, tv, !isPositivePosition))
       val variances = varianceOf(resTy, tv, isPositivePosition) :: variancesInArgTys
       combineVariances(variances)

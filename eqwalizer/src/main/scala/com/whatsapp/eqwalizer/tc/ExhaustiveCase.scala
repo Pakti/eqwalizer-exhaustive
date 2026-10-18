@@ -11,7 +11,7 @@ import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.*
 import com.whatsapp.eqwalizer.ast.Pats.*
 import com.whatsapp.eqwalizer.ast.Show.show
-import com.whatsapp.eqwalizer.ast.Specifier.*
+import com.whatsapp.eqwalizer.ast.Specifier
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.{Id, Pos}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.NonExhaustiveCase
@@ -66,11 +66,11 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       "is_binary" -> BinaryType,
       "is_bitstring" -> BinaryType,
       "is_boolean" -> UnionType(Set(falseType, trueType)),
-      "is_float" -> floatType,
+      "is_float" -> FloatType,
       "is_function" -> AnyFunType,
-      "is_integer" -> NumberType,
+      "is_integer" -> IntegerType,
       "is_list" -> ListType(AnyType),
-      "is_number" -> NumberType,
+      "is_number" -> UnionType(Set(IntegerType, FloatType)),
       "is_pid" -> PidType,
       "is_port" -> PortType,
       "is_reference" -> ReferenceType,
@@ -538,13 +538,13 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def isByteIntegerSpecifier(spec: com.whatsapp.eqwalizer.ast.Specifier): Boolean =
     spec match {
-      case SignedIntegerSpecifier | UnsignedIntegerSpecifier => true
+      case Specifier.SignedInteger | Specifier.UnsignedInteger => true
       case _                                                 => false
     }
 
   private def isOpenBinarySpecifier(spec: com.whatsapp.eqwalizer.ast.Specifier): Boolean =
     spec match {
-      case BinarySpecifier | BytesSpecifier => true
+      case Specifier.Binary | Specifier.Bytes => true
       case _                                => false
     }
 
@@ -580,8 +580,8 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         Some(PatternCover(AtomLitType(s), Set.empty))
       case PatNil() =>
         Some(PatternCover(NilType, Set.empty))
-      case PatInt() | PatNumber() =>
-        Some(PatternCover(NumberType, Set.empty))
+      case PatInt() | PatFloat() =>
+        Some(PatternCover(UnionType(Set(IntegerType, FloatType)), Set.empty))
       case PatTuple(elems) =>
         val elemCovers = elems.map(simplePatternCover)
         if (elemCovers.forall(_.isDefined))
@@ -627,7 +627,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
         else None
       case BoundedDynamicType(_) | DynamicType | AnyType =>
         None
-      case AtomLitType(_) | AtomType | NilType | NumberType | BinaryType | PidType | PortType | ReferenceType | AnyFunType =>
+      case AtomLitType(_) | AtomType | NilType | IntegerType | FloatType | BinaryType | PidType | PortType | ReferenceType | AnyFunType =>
         Some(List(t))
       case t: TupleType =>
         Some(List(t))

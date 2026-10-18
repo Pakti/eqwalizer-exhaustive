@@ -21,6 +21,22 @@ jar:
 jar-path:
 	@find "$(REPO)/eqwalizer/target" -name "$(JAR_NAME)" -print
 
+.PHONY: test-upstream
+test-upstream:
+	cd "$(REPO)/eqwalizer" && $(SBT) test
+
+.PHONY: smoke
+smoke: jar
+	python3 "$(REPO)/scripts/ipc-smoke.py"
+
+# Fork-owned source fixtures; requires ELP and OTP, but not rebar3.
+.PHONY: test test-runner
+test: jar test-upstream
+	python3 "$(REPO)/tests/exhaustiveness/run.py"
+
+test-runner:
+	python3 -m unittest discover -s "$(REPO)/tests/exhaustiveness" -p 'test_*.py'
+
 .PHONY: status
 status:
 	cd "$(REPO)" && git status --short && echo && git diff --stat

@@ -1,13 +1,16 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
 
 import scala.annotation.tailrec
-
 import com.whatsapp.eqwalizer.ast.Exprs.{AtomLit, Cons, Expr, Tuple}
 import com.whatsapp.eqwalizer.ast.RemoteId
 import com.whatsapp.eqwalizer.ast.Types._
@@ -18,21 +21,52 @@ final class CustomReturn(pipelineContext: PipelineContext) {
   private type ReturnHandler = (List[Expr], List[Type], Type) => Type
 
   private lazy val custom: Map[RemoteId, ReturnHandler] = Map(
+    RemoteId("erlang", "abs", 1) -> { (_, argTys, resTy) =>
+      val List(argTy) = argTys
+      if (subtype.subType(argTy, numberType)) argTy else resTy
+    },
     RemoteId("erlang", "min", 2) -> { (_, argTys, resTy) =>
       val List(argTy1, argTy2) = argTys
-      if (subtype.isNoneType(argTy1) || subtype.isNoneType(argTy2))
+      if (Subtype.isNoneType(argTy1) || Subtype.isNoneType(argTy2))
         resTy
       else if (
-        subtype.gradualSubType(argTy1, NumberType) &&
-        subtype.gradualSubType(argTy2, UnionType(Set(NumberType, AtomType)))
+        subtype.gradualSubType(argTy1, IntegerType) &&
+        subtype.gradualSubType(argTy2, UnionType(Set(IntegerType, AtomType)))
       )
-        NumberType
+        IntegerType
       else if (
-        subtype.gradualSubType(argTy2, NumberType) &&
-        subtype.gradualSubType(argTy1, UnionType(Set(NumberType, AtomType)))
+        subtype.gradualSubType(argTy2, IntegerType) &&
+        subtype.gradualSubType(argTy1, UnionType(Set(IntegerType, AtomType)))
       )
-        NumberType
+        IntegerType
+      else if (
+        subtype.gradualSubType(argTy1, FloatType) &&
+        subtype.gradualSubType(argTy2, UnionType(Set(FloatType, AtomType)))
+      )
+        FloatType
+      else if (
+        subtype.gradualSubType(argTy2, FloatType) &&
+        subtype.gradualSubType(argTy1, UnionType(Set(FloatType, AtomType)))
+      )
+        FloatType
+      else if (
+        subtype.gradualSubType(argTy1, numberType) &&
+        subtype.gradualSubType(argTy2, UnionType(Set(numberType, AtomType)))
+      )
+        numberType
+      else if (
+        subtype.gradualSubType(argTy2, numberType) &&
+        subtype.gradualSubType(argTy1, UnionType(Set(numberType, AtomType)))
+      )
+        numberType
       else resTy
+    },
+    RemoteId("lists", "sum", 1) -> { (_, argTys, resTy) =>
+      val List(lTy) = argTys
+      if (subtype.subType(lTy, ListType(IntegerType)))
+        IntegerType
+      else
+        resTy
     },
     RemoteId("re", "replace", 4) -> { (args, _, resTy) =>
       args match {

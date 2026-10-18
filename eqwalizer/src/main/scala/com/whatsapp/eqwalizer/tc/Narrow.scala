@@ -1,131 +1,32 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
 
 import com.whatsapp.eqwalizer.ast.Forms.RecDecl
-import com.whatsapp.eqwalizer.ast.{RemoteId, TypeVars}
-import com.whatsapp.eqwalizer.ast.Types._
-import scala.util.boundary
+import com.whatsapp.eqwalizer.ast.RemoteId
+import com.whatsapp.eqwalizer.ast.Types.*
 
 class Narrow(pipelineContext: PipelineContext) {
   private val subtype = pipelineContext.subtype
   private val util = pipelineContext.util
 
-  // It tries to narrow t1 wrt t2.
-  // Ideally, it finds t1 ∩ t2, but it's not guaranteed.
-  // Read the implementation for more details.
-  def meet(t1: Type, t2: Type): Type =
-    meetAux(t1, t2, Set.empty)
+  private def interAs[T](tss: List[List[T]])(meet2: (T, T) => Option[T]): List[T] =
+    tss.reduce((ts1, ts2) => for { t1 <- ts1; t2 <- ts2; c <- meet2(t1, t2).toList } yield c)
 
-  private def meetAux(t1: Type, t2: Type, seen: Set[RemoteId]): Type =
-    if (subtype.gradualSubType(t1, t2)) t1
-    else if (subtype.gradualSubType(t2, t1)) t2
-    else
-      (t1, t2) match {
-        case (RemoteType(rid, args), _) =>
-          val body = util.getTypeDeclBody(rid, args)
-          val met = meetAux(body, t2, seen)
-          if (met == body) t1 else met
-        case (_, RemoteType(rid, args)) =>
-          if (seen(rid)) t1
-          else {
-            val body = util.getTypeDeclBody(rid, args)
-            val met = meetAux(t1, body, seen + rid)
-            if (met == body) t2 else met
-          }
-        case (BoundedDynamicType(b1), DynamicType) =>
-          BoundedDynamicType(b1)
-        case (DynamicType, BoundedDynamicType(b2)) =>
-          BoundedDynamicType(b2)
-        case (DynamicType, t) => BoundedDynamicType(t)
-        case (t, DynamicType) => BoundedDynamicType(t)
-        case (BoundedDynamicType(b1), BoundedDynamicType(b2)) =>
-          BoundedDynamicType(meetAux(b1, b2, seen))
-        case (BoundedDynamicType(b1), _) =>
-          BoundedDynamicType(meetAux(b1, t2, seen))
-        case (_, BoundedDynamicType(b2)) =>
-          BoundedDynamicType(meetAux(t1, b2, seen))
-        // Composed "refinable" types - refining component by component
-        case (UnionType(ty1s), _) => subtype.join(ty1s.map(meetAux(_, t2, seen)))
-        case (_, UnionType(ty2s)) =>
-          subtype.join(ty2s.map(meetAux(t1, _, seen)))
-
-        case (TupleType(elems1), TupleType(elems2)) if elems1.size == elems2.size =>
-          boundary {
-            val elems = elems1.lazyZip(elems2).map { (a, b) =>
-              val t = meetAux(a, b, seen)
-              if subtype.isNoneType(t) then boundary.break(NoneType)
-              t
-            }
-            TupleType(elems)
-          }
-        case (ListType(et1), ListType(et2)) =>
-          val et = meetAux(et1, et2, seen)
-          if (subtype.isNoneType(et)) NilType
-          else ListType(et)
-        case (ft1: FunType, ft2: FunType) if ft1.argTys.size == ft2.argTys.size =>
-          TypeVars.conformForalls(ft1, ft2) match {
-            case None => NoneType
-            case Some((FunType(forall, args1, res1), FunType(_, args2, res2))) =>
-              FunType(
-                forall,
-                args1.lazyZip(args2).map(subtype.join),
-                meetAux(res1, res2, seen),
-              )
-          }
-        case (AnyArityFunType(resTy1), AnyArityFunType(resTy2)) =>
-          AnyArityFunType(meetAux(resTy1, resTy2, seen))
-        case (MapType(props1, kT1, vT1), MapType(props2, kT2, vT2)) =>
-          boundary {
-            var props: Map[Key, Prop] = Map()
-            val keys = props1.keySet ++ props2.keySet
-            for (key <- keys) {
-              val prop1 = props1.get(key)
-              val prop2 = props2.get(key)
-              val keyT = Key.asType(key)
-              if ((prop1.isEmpty && !subtype.subType(keyT, kT1)) || (prop2.isEmpty && !subtype.subType(keyT, kT2))) {
-                boundary.break(NoneType)
-              }
-              val propT1 = prop1.map(_.tp).getOrElse(vT1)
-              val propT2 = prop2.map(_.tp).getOrElse(vT2)
-              val req = prop1.exists(_.req) || prop2.exists(_.req)
-              val meetType = meetAux(propT1, propT2, seen)
-              if (req && subtype.isNoneType(meetType)) {
-                boundary.break(NoneType)
-              }
-              props += (key -> Prop(req, meetType))
-            }
-            MapType(props, meetAux(kT1, kT2, seen), meetAux(vT1, vT2, seen))
-          }
-        case (rt: RefinedRecordType, t: RecordType) if t == rt.recType => rt
-        case (t: RecordType, rt: RefinedRecordType) if t == rt.recType => rt
-        case (rt1: RefinedRecordType, rt2: RefinedRecordType) if rt1.recType == rt2.recType =>
-          val fields = rt1.fields.keySet ++ rt2.fields.keySet
-          val fieldsMeet = fields.map { fieldName =>
-            val t1 = rt1.fields.getOrElse(fieldName, AnyType)
-            val t2 = rt2.fields.getOrElse(fieldName, AnyType)
-            fieldName -> meet(t1, t2)
-          }.toMap
-          if (fieldsMeet.values.exists(subtype.isNoneType)) NoneType
-          else RefinedRecordType(rt1.recType, fieldsMeet)
-
-        // "Non-refinable" types. - Using the main type
-        case (FreeVarType(_), _)                    => t1
-        case (_, FreeVarType(_))                    => t1
-        case (AnyFunType, FunType(_, _, _))         => t1
-        case (FunType(_, _, _), AnyFunType)         => t1
-        case (AnyArityFunType(_), FunType(_, _, _)) => t1
-        case (FunType(_, _, _), AnyArityFunType(_)) => t1
-        case (AnyArityFunType(_), AnyFunType)       => t1
-        case (AnyFunType, AnyArityFunType(_))       => t1
-        // At this point we know for sure that t1 /\ t2 = 0
-        case (_, _) =>
-          NoneType
-      }
+  private def meetMaps(m1: MapType, m2: MapType): Option[MapType] =
+    subtype.meet(m1, m2) match { case m: MapType => Some(m); case _ => None }
+  private def meetFuns(f1: FunType, f2: FunType): Option[FunType] =
+    subtype.meet(f1, f2) match { case f: FunType => Some(f); case _ => None }
+  private def meetTuples(t1: TupleType, t2: TupleType): Option[TupleType] =
+    subtype.meet(t1, t2) match { case t: TupleType => Some(t); case _ => None }
 
   def asListType(t: Type): Option[ListType] =
     extractListElem(t) match {
@@ -136,8 +37,8 @@ class Narrow(pipelineContext: PipelineContext) {
   private def dynamicMap(t: MapType): MapType = {
     val MapType(props, kType, vType) = t
     MapType(
-      props.map { case (key, Prop(req, tp)) =>
-        (key, Prop(req, boundedDynamic(tp)))
+      props.map { case (key, MapProp(req, tp)) =>
+        (key, MapProp(req, boundedDynamic(tp)))
       },
       boundedDynamic(kType),
       boundedDynamic(vType),
@@ -166,11 +67,47 @@ class Narrow(pipelineContext: PipelineContext) {
         Set(mapType)
       case UnionType(ts) =>
         ts.flatMap(asMapTypes)
+      case InterType(ts) =>
+        interAs(ts.toList.map(asMapTypes(_).toList))(meetMaps).toSet
       case RemoteType(rid, args) =>
         val body = util.getTypeDeclBody(rid, args)
         asMapTypes(body)
       case _ => Set()
     }
+
+  def asNativeRecordTypes(t: Type): (Set[NativeRecordType], Boolean) = {
+    def loop(t: Type): (Set[NativeRecordType], Boolean) = t match {
+      case DynamicType | AnyType | AnyNativeRecordType =>
+        (Set.empty, true)
+      case BoundedDynamicType(bound) =>
+        val (s, _) = loop(bound)
+        (s, true)
+      case FreeVarType(_) =>
+        (Set.empty, true)
+      case nrt: NativeRecordType =>
+        (Set(nrt), false)
+      case InterType(ts) =>
+        ts.toList.map(loop).reduce { case ((s1, any1), (s2, any2)) =>
+          val s = (any1, any2) match {
+            case (true, true)   => Set.empty[NativeRecordType]
+            case (true, false)  => s2 // an any/dynamic conjunct imposes no record constraint
+            case (false, true)  => s1
+            case (false, false) => s1.intersect(s2) // must be a record of both conjuncts
+          }
+          (s, any1 && any2)
+        }
+      case UnionType(ts) =>
+        ts.foldLeft((Set.empty[NativeRecordType], false)) { case ((acc, anyAcc), ty) =>
+          val (s, any) = loop(ty)
+          (acc ++ s, anyAcc || any)
+        }
+      case RemoteType(rid, args) =>
+        loop(util.getTypeDeclBody(rid, args))
+      case _ =>
+        (Set.empty, false)
+    }
+    loop(t)
+  }
 
   def asMapOrIterTypes(t: Type): Set[MapType] =
     t match {
@@ -184,6 +121,8 @@ class Narrow(pipelineContext: PipelineContext) {
         Set(mapType)
       case UnionType(ts) =>
         ts.flatMap(asMapOrIterTypes)
+      case InterType(ts) =>
+        interAs(ts.toList.map(asMapOrIterTypes(_).toList))(meetMaps).toSet
       case RemoteType(RemoteId("maps", "iterator", 0), _) =>
         Set(MapType(Map(), AnyType, AnyType))
       case RemoteType(RemoteId("maps", "iterator", 2), List(keyT, valT)) =>
@@ -222,18 +161,18 @@ class Narrow(pipelineContext: PipelineContext) {
 
   def withRequiredProp(k: Key, t: MapType): Option[MapType] =
     t.props.get(k) match {
-      case Some(Prop(_, tp)) => Some(t.copy(props = t.props.updated(k, Prop(req = true, tp))))
+      case Some(MapProp(_, tp)) => Some(t.copy(props = t.props.updated(k, MapProp(req = true, tp))))
       case None if subtype.subType(Key.asType(k), t.kType) =>
-        Some(t.copy(props = t.props.updated(k, Prop(req = true, t.vType))))
+        Some(t.copy(props = t.props.updated(k, MapProp(req = true, t.vType))))
       case _ => None
     }
 
   def selectKeys(reqKeyT: Type, optKeyT: Type, mapT: MapType): Type = {
     val selectProps = mapT.props.collect {
-      case (key, Prop(true, tp)) if subtype.subType(Key.asType(key), reqKeyT) => (key, Prop(req = true, tp))
-      case (key, Prop(_, tp)) if subtype.subType(Key.asType(key), optKeyT)    => (key, Prop(req = false, tp))
+      case (key, MapProp(true, tp)) if subtype.subType(Key.asType(key), reqKeyT) => (key, MapProp(req = true, tp))
+      case (key, MapProp(_, tp)) if subtype.subType(Key.asType(key), optKeyT)    => (key, MapProp(req = false, tp))
     }
-    MapType(selectProps, meet(mapT.kType, optKeyT), mapT.vType)
+    MapType(selectProps, subtype.meet(mapT.kType, optKeyT), mapT.vType)
   }
 
   private def extractListElem(t: Type): List[Type] =
@@ -242,12 +181,20 @@ class Narrow(pipelineContext: PipelineContext) {
         List(DynamicType)
       case AnyType =>
         List(AnyType)
+      case InterType(tys) =>
+        // list-usable only if every conjunct is list-shaped; element type is their meet
+        val elemLists = tys.toList.map(extractListElem)
+        if (elemLists.exists(_.isEmpty)) List()
+        else List(subtype.inter(elemLists.map(subtype.join)))
       case UnionType(tys) =>
         tys.toList.flatMap(extractListElem)
       case NilType =>
         List(NoneType)
       case ListType(elemType) =>
         List(elemType)
+      case ConsType(headT, tailT) =>
+        val tailElems = extractListElem(tailT)
+        headT :: tailElems
       case NoneType =>
         List(NoneType)
       case RemoteType(rid, args) =>
@@ -275,6 +222,8 @@ class Narrow(pipelineContext: PipelineContext) {
       Set(FunType(0, List.fill(arity)(DynamicType), resTy))
     case UnionType(tys) =>
       tys.flatMap(asFunTypes(_, arity))
+    case InterType(tys) =>
+      interAs(tys.toList.map(asFunTypes(_, arity).toList))(meetFuns).toSet
     case RemoteType(rid, args) =>
       val body = util.getTypeDeclBody(rid, args)
       asFunTypes(body, arity)
@@ -298,6 +247,8 @@ class Narrow(pipelineContext: PipelineContext) {
       Set(FunType(0, List.fill(arity)(DynamicType), resTy))
     case UnionType(tys) =>
       tys.flatMap(onlyFunTypes(_, arity))
+    case InterType(tys) =>
+      interAs(tys.toList.map(onlyFunTypes(_, arity).toList))(meetFuns).toSet
     case RemoteType(rid, args) =>
       val body = util.getTypeDeclBody(rid, args)
       onlyFunTypes(body, arity)
@@ -317,35 +268,29 @@ class Narrow(pipelineContext: PipelineContext) {
       case AnyType | FreeVarType(_) =>
         List(TupleType(List.fill(arity)(AnyType)))
       case r: RecordType if arity > 0 =>
-        val rec = util.getRecord(r.module, r.name)
-        val recFieldTypes = rec match {
-          case Some(recDecl) =>
-            recDecl.fields.map(_.tp)
-          case None =>
-            List.fill(arity - 1)(DynamicType)
-        }
+        val recDecl = util.getRecord(r.module, r.name)
+        val recFieldTypes = recDecl.fields.map(_.tp)
         val recArity = recFieldTypes.size + 1
         if (arity == recArity) {
           List(TupleType(AtomLitType(r.name) :: recFieldTypes))
         } else
           List()
       case r: RefinedRecordType if arity > 0 =>
-        val rec = util.getRecord(r.recType.module, r.recType.name)
-        val recFieldTypes = rec match {
-          case Some(recDecl) =>
-            recDecl.fields.map(f => r.fields.getOrElse(f.name, f.tp))
-          case None =>
-            List.fill(arity - 1)(DynamicType)
-        }
+        val recDecl = util.getRecord(r.recType.module, r.recType.name)
+        val recFieldTypes = recDecl.fields.map(f => r.fields.getOrElse(f.name, f.tp))
         val recArity = recFieldTypes.size + 1
         if (arity == recArity) {
           List(TupleType(AtomLitType(r.recType.name) :: recFieldTypes))
         } else
           List()
       case AnyTupleType =>
-        List(TupleType(List.fill(arity)(DynamicType)))
-      case tt: TupleType if tt.argTys.size == arity => List(tt)
-      case UnionType(tys)                           => tys.flatMap(asTupleTypeAux(_, arity)).toList
+        List(TupleType(List.fill(arity)(AnyType)))
+      case tt: TupleType if tt.argTys.size == arity =>
+        List(tt)
+      case UnionType(tys) =>
+        tys.flatMap(asTupleTypeAux(_, arity)).toList
+      case InterType(tys) =>
+        interAs(tys.toList.map(asTupleTypeAux(_, arity)))(meetTuples)
       case RemoteType(rid, args) =>
         val body = util.getTypeDeclBody(rid, args)
         asTupleTypeAux(body, arity)
@@ -371,19 +316,13 @@ class Narrow(pipelineContext: PipelineContext) {
       case tt: TupleType if isTupleElem(tt, elemIndex, elemTy) =>
         t
       case r: RecordType =>
-        recordToTuple(r) match {
-          case Some(tt) if isTupleElem(tt, elemIndex, elemTy) =>
-            t
-          case _ =>
-            NoneType
-        }
+        if (isTupleElem(recordToTuple(r), elemIndex, elemTy)) t
+        else NoneType
       case r: RefinedRecordType =>
-        refinedRecordToTuple(r) match {
-          case Some(tt) if isTupleElem(tt, elemIndex, elemTy) =>
-            t
-          case _ =>
-            NoneType
-        }
+        if (isTupleElem(refinedRecordToTuple(r), elemIndex, elemTy)) t
+        else NoneType
+      case InterType(tys) =>
+        subtype.inter(tys.toList.map(filterTupleTypeAux(_, elemIndex, elemTy)))
       case UnionType(tys) =>
         UnionType(tys.map(filterTupleTypeAux(_, elemIndex, elemTy)))
       case RemoteType(rid, args) =>
@@ -409,7 +348,7 @@ class Narrow(pipelineContext: PipelineContext) {
     case DynamicType =>
       Right(DynamicType)
     case AnyTupleType =>
-      Right(DynamicType)
+      Right(AnyType)
     case BoundedDynamicType(t) if subtype.subType(t, AnyTupleType) =>
       Right(BoundedDynamicType(getTupleElement(t, idx).getOrElse(NoneType)))
     case BoundedDynamicType(t) =>
@@ -419,14 +358,15 @@ class Narrow(pipelineContext: PipelineContext) {
     case TupleType(elemTys) =>
       Left(elemTys.length)
     case r: RecordType =>
-      recordToTuple(r) match {
-        case Some(tupTy) => getTupleElement(tupTy, idx)
-        case None        => Right(DynamicType)
-      }
+      getTupleElement(recordToTuple(r), idx)
     case r: RefinedRecordType =>
-      refinedRecordToTuple(r) match {
-        case Some(tupTy) => getTupleElement(tupTy, idx)
-        case None        => Right(DynamicType)
+      getTupleElement(refinedRecordToTuple(r), idx)
+    case InterType(tys) =>
+      tys.toList.map(getTupleElement(_, idx)).reduce {
+        case (Right(a), Right(b)) => Right(subtype.meet(a, b))
+        case (Left(n1), Left(n2)) => Left(n1.min(n2))
+        case (Left(n1), _)        => Left(n1)
+        case (_, Left(n2))        => Left(n2)
       }
     case UnionType(tys) =>
       val res = tys.map(getTupleElement(_, idx)).foldLeft[Either[Int, Set[Type]]](Right(Set.empty)) {
@@ -443,6 +383,47 @@ class Narrow(pipelineContext: PipelineContext) {
       throw new IllegalStateException()
   }
 
+  def setTupleElement(t: Type, idx: Int, elemT: Type): Either[Int, Type] = t match {
+    case NoneType =>
+      Right(NoneType)
+    case DynamicType =>
+      Right(DynamicType)
+    case AnyTupleType =>
+      Right(AnyTupleType)
+    case BoundedDynamicType(t) if subtype.subType(t, AnyTupleType) =>
+      Right(BoundedDynamicType(setTupleElement(t, idx, elemT).getOrElse(NoneType)))
+    case BoundedDynamicType(t) =>
+      Right(BoundedDynamicType(NoneType))
+    case TupleType(elemTys) if idx >= 1 && idx <= elemTys.length =>
+      Right(TupleType(elemTys.updated(idx - 1, elemT)))
+    case TupleType(elemTys) =>
+      Left(elemTys.length)
+    case r: RecordType =>
+      setTupleElement(recordToTuple(r), idx, elemT)
+    case r: RefinedRecordType =>
+      setTupleElement(refinedRecordToTuple(r), idx, elemT)
+    case InterType(tys) =>
+      tys.toList.map(setTupleElement(_, idx, elemT)).reduce {
+        case (Right(a), Right(b)) => Right(subtype.meet(a, b))
+        case (Left(n1), Left(n2)) => Left(n1.min(n2))
+        case (Left(n1), _)        => Left(n1)
+        case (_, Left(n2))        => Left(n2)
+      }
+    case UnionType(tys) =>
+      val res = tys.map(setTupleElement(_, idx, elemT)).foldLeft[Either[Int, Set[Type]]](Right(Set.empty)) {
+        case (Right(accTy), Right(elemTy)) => Right(accTy + elemTy)
+        case (Left(n1), Left(n2))          => Left(n1.min(n2))
+        case (Left(n1), _)                 => Left(n1)
+        case (_, Left(n2))                 => Left(n2)
+      }
+      res.map { optionTys => UnionType(util.flattenUnions(UnionType(optionTys)).toSet) }
+    case RemoteType(rid, args) =>
+      val body = util.getTypeDeclBody(rid, args)
+      setTupleElement(body, idx, elemT)
+    case _ =>
+      throw new IllegalStateException()
+  }
+
   /**
   * Given a type (required to be a subtype of `AnyTupleType`), returns the union of all its element types.
   */
@@ -452,7 +433,7 @@ class Narrow(pipelineContext: PipelineContext) {
     case DynamicType =>
       DynamicType
     case AnyTupleType =>
-      DynamicType
+      AnyType
     case BoundedDynamicType(t) if subtype.subType(t, AnyTupleType) =>
       BoundedDynamicType(getAllTupleElements(t))
     case BoundedDynamicType(t) =>
@@ -460,15 +441,11 @@ class Narrow(pipelineContext: PipelineContext) {
     case TupleType(elemTys) =>
       UnionType(elemTys.toSet)
     case r: RecordType =>
-      recordToTuple(r) match {
-        case Some(tupTy) => getAllTupleElements(tupTy)
-        case None        => DynamicType
-      }
+      getAllTupleElements(recordToTuple(r))
     case r: RefinedRecordType =>
-      refinedRecordToTuple(r) match {
-        case Some(tupTy) => getAllTupleElements(tupTy)
-        case None        => DynamicType
-      }
+      getAllTupleElements(refinedRecordToTuple(r))
+    case InterType(tys) =>
+      subtype.inter(tys.toList.map(getAllTupleElements))
     case UnionType(tys) =>
       UnionType(util.flattenUnions(UnionType(tys.map(getAllTupleElements))).toSet)
     case RemoteType(rid, args) =>
@@ -478,36 +455,42 @@ class Narrow(pipelineContext: PipelineContext) {
       throw new IllegalStateException()
   }
 
-  private def recordToTuple(r: RecordType): Option[TupleType] =
+  private def recordToTuple(r: RecordType): TupleType =
     refinedRecordToTuple(RefinedRecordType(r, Map()))
 
-  private def refinedRecordToTuple(r: RefinedRecordType): Option[TupleType] =
-    util.getRecord(r.recType.module, r.recType.name).map { recDecl =>
-      val elemTys = AtomLitType(r.recType.name) :: recDecl.fields.map(f => r.fields.getOrElse(f.name, f.tp))
-      TupleType(elemTys)
-    }
+  private def refinedRecordToTuple(r: RefinedRecordType): TupleType = {
+    val recDecl = util.getRecord(r.recType.module, r.recType.name)
+    val elemTys = AtomLitType(r.recType.name) :: recDecl.fields.map(f => r.fields.getOrElse(f.name, f.tp))
+    TupleType(elemTys)
+  }
 
   def adjustMapType(mapType: MapType, keyT: Type, valT: Type): MapType =
     asKeys(keyT) match {
       case Some(keys) if keys.size == 1 =>
-        MapType(mapType.props.updated(keys.head, Prop(req = true, valT)), mapType.kType, mapType.vType)
+        MapType(mapType.props.updated(keys.head, MapProp(req = true, valT)), mapType.kType, mapType.vType)
       case Some(keys) =>
         keys.foldLeft(mapType) { case (mapType, key) =>
           val props = mapType.props.updatedWith(key) {
-            case Some(prop) => Some(Prop(prop.req, subtype.join(valT, prop.tp)))
-            case None       => Some(Prop(req = false, valT))
+            case Some(prop) => Some(MapProp(prop.req, subtype.join(valT, prop.tp)))
+            case None       => Some(MapProp(req = false, valT))
           }
           MapType(props, mapType.kType, mapType.vType)
         }
       case None if subtype.isDynamicType(mapType.kType) && subtype.isDynamicType(mapType.vType) =>
         mapType
       case None =>
-        MapType(mapType.props, subtype.join(mapType.kType, keyT), subtype.join(mapType.vType, valT))
+        val props = mapType.props.map { case (key, prop) =>
+          if (subtype.mayOverlap(Key.asType(key), keyT))
+            (key, MapProp(prop.req, subtype.join(prop.tp, valT)))
+          else
+            (key, prop)
+        }
+        MapType(props, subtype.join(mapType.kType, keyT), subtype.join(mapType.vType, valT))
     }
 
   def setAllFieldsOptional(mapType: MapType, newValTy: Option[Type] = None): Type =
-    MapType(
-      mapType.props.map { case (key, Prop(_, tp)) => (key, Prop(req = false, newValTy.getOrElse(tp))) },
+    MapType_*(
+      mapType.props.map { case (key, MapProp(_, tp)) => (key, MapProp(req = false, newValTy.getOrElse(tp))) },
       mapType.kType,
       newValTy.getOrElse(mapType.vType),
     )
@@ -524,12 +507,16 @@ class Narrow(pipelineContext: PipelineContext) {
           .collectFirst { case (f, i) if f.name == fieldName => i + 1 }
           .map(argTys(_))
           .getOrElse(field.tp)
-      case AnyTupleType | DynamicType | FreeVarType(_) =>
+      case AnyTupleType =>
+        AnyType
+      case DynamicType | FreeVarType(_) =>
         field.tp
       case BoundedDynamicType(_) =>
         BoundedDynamicType(field.tp)
       case RemoteType(id, argTys) =>
         getRecordField(recDecl, util.getTypeDeclBody(id, argTys), fieldName)
+      case InterType(argTys) =>
+        subtype.inter(argTys.toList.map(getRecordField(recDecl, _, fieldName)))
       case UnionType(argTys) =>
         val fieldTys = argTys.map(getRecordField(recDecl, _, fieldName))
         UnionType(fieldTys)
@@ -545,6 +532,15 @@ class Narrow(pipelineContext: PipelineContext) {
     t match {
       case BoundedDynamicType(bound) =>
         asKeys(bound)
+      case InterType(ts) =>
+        // dual of the union fold: None is the identity, enumerable key-sets are intersected
+        ts.foldLeft[Option[Set[Key]]](None) { (acc, ty) =>
+          (acc, asKeys(ty)) match {
+            case (None, keys)         => keys
+            case (keys, None)         => keys
+            case (Some(k1), Some(k2)) => Some(k1.intersect(k2))
+          }
+        }
       case UnionType(ts) =>
         ts.foldLeft[Option[Set[Key]]](Some(Set())) { (acc, ty) =>
           acc.flatMap(keys => asKeys(ty).map(keys2 => keys ++ keys2))
@@ -559,11 +555,11 @@ class Narrow(pipelineContext: PipelineContext) {
   private def mergeMaps(s1: MapType, s2: MapType, inOrder: Boolean): MapType = {
     MapType(
       (s1.props.keySet ++ s2.props.keySet).map { key =>
-        val prop1 = s1.props.getOrElse(key, Prop(req = false, NoneType))
-        val prop2 = s2.props.getOrElse(key, Prop(req = false, NoneType))
+        val prop1 = s1.props.getOrElse(key, MapProp(req = false, NoneType))
+        val prop2 = s2.props.getOrElse(key, MapProp(req = false, NoneType))
         val req = (inOrder && (prop1.req || prop2.req)) || (prop1.req && prop2.req)
         val tp = if (inOrder && prop2.req) prop2.tp else subtype.join(prop1.tp, prop2.tp)
-        key -> Prop(req, tp)
+        key -> MapProp(req, tp)
       }.toMap,
       subtype.join(s1.kType, s2.kType),
       subtype.join(s1.vType, s2.vType),

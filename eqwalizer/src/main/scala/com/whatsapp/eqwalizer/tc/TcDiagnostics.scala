@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -63,6 +67,12 @@ object TcDiagnostics {
     def errorName = "undefined_field"
     override def erroneousExpr: Option[Expr] = None
   }
+
+  case class UndefinedAnonNativeRecordField(pos: Pos, fieldName: String) extends TypeError {
+    override val msg: String = s"#_{...}: field $fieldName is not defined on any of the possible native records"
+    def errorName = "undefined_anon_native_record_field"
+    override def erroneousExpr: Option[Expr] = None
+  }
   case class PrivateConstructorViolation(pos: Pos, recName: String, owner: String) extends TypeError {
     override val msg: String =
       s"Cannot construct #$recName{} outside its private constructor owner module $owner"
@@ -80,9 +90,27 @@ object TcDiagnostics {
     def errorName = "unbound_var"
     override def erroneousExpr: Option[Expr] = None
   }
-  case class UnboundRecord(pos: Pos, rec: String) extends TypeError {
-    override val msg: String = s"Unbound rec: ${rec}"
-    def errorName = "unbound_record"
+  case class UnboundNativeRecord(pos: Pos, module: String, name: String) extends TypeError {
+    override val msg: String = s"Unbound native record: #$module:$name{}"
+    def errorName = "unbound_native_record"
+    override def erroneousExpr: Option[Expr] = None
+  }
+  case class UndefinedNativeRecordField(pos: Pos, module: String, name: String, fieldName: String) extends TypeError {
+    override val msg: String = s"#$module:$name{}: field $fieldName is not defined"
+    def errorName = "undefined_native_record_field"
+    override def erroneousExpr: Option[Expr] = None
+  }
+
+  case class MissingRequiredNativeRecordField(pos: Pos, module: String, name: String, fieldName: String)
+      extends TypeError {
+    override val msg: String = s"#$module:$name{}: required field $fieldName has no value and no default"
+    def errorName = "missing_required_native_record_field"
+    override def erroneousExpr: Option[Expr] = None
+  }
+
+  case class NonExportedNativeRecord(pos: Pos, module: String, name: String) extends TypeError {
+    override val msg: String = s"Native record $module:$name is not exported (no -export_record directive)"
+    def errorName = "non_exported_native_record"
     override def erroneousExpr: Option[Expr] = None
   }
   case class NonexistentBehaviour(pos: Pos, name: String) extends TypeError {

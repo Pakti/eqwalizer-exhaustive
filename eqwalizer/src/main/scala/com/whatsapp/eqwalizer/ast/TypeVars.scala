@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -22,6 +26,7 @@ object TypeVars {
         shift = shift + ft.forall
         (newVars, res)
       }
+
   }
 
   enum ElimMode {
@@ -50,9 +55,11 @@ object TypeVars {
     case AnyArityFunType(resTy)       => resTy :: Nil
     case TupleType(argTys)            => argTys
     case UnionType(tys)               => tys.toList
+    case InterType(tys)               => tys.toList
     case RemoteType(_, tys)           => tys
     case MapType(props, kType, vType) => kType :: vType :: props.values.map(_.tp).toList
     case ListType(ty)                 => ty :: Nil
+    case ConsType(headT, tailT)       => headT :: tailT :: Nil
     case RefinedRecordType(_, fields) => fields.toList.map(_._2)
     case BoundedDynamicType(bound)    => bound :: Nil
     case _                            => Nil
@@ -74,13 +81,17 @@ object TypeVars {
       TupleType(params.map(substLevels(shift)))
     case ListType(elemT) =>
       ListType(substLevels(shift)(elemT))
+    case ConsType(headT, tailT) =>
+      ConsType(substLevels(shift)(headT), substLevels(shift)(tailT))
     case UnionType(params) =>
       UnionType(params.map(substLevels(shift)))
+    case InterType(params) =>
+      InterType(params.map(substLevels(shift)))
     case RemoteType(id, params) =>
       RemoteType(id, params.map(substLevels(shift)))
     case MapType(props, kt, vt) =>
       MapType(
-        props.map { case (key, Prop(req, tp)) => (key, Prop(req, substLevels(shift)(tp))) },
+        props.map { case (key, MapProp(req, tp)) => (key, MapProp(req, substLevels(shift)(tp))) },
         substLevels(shift)(kt),
         substLevels(shift)(vt),
       )
@@ -116,8 +127,12 @@ object TypeVars {
         TupleType(params.map(elim))
       case ListType(elemT) =>
         ListType(elim(elemT))
+      case ConsType(headT, tailT) =>
+        ConsType(elim(headT), elim(tailT))
       case UnionType(params) =>
         UnionType(params.map(elim))
+      case InterType(params) =>
+        InterType(params.map(elim))
       case RemoteType(id, params) =>
         val variances = Variance.paramVariances(id)
         val elimmedParams = params.lazyZip(variances).map {
@@ -133,7 +148,7 @@ object TypeVars {
       case vt: FreeVarType =>
         vt
       case MapType(props, kt, vt) =>
-        MapType(props.map { case (key, Prop(req, tp)) => (key, Prop(req, elim(tp))) }, elim(kt), elim(vt))
+        MapType(props.map { case (key, MapProp(req, tp)) => (key, MapProp(req, elim(tp))) }, elim(kt), elim(vt))
       case BoundedDynamicType(bound) =>
         BoundedDynamicType(elim(bound))
       case _ =>

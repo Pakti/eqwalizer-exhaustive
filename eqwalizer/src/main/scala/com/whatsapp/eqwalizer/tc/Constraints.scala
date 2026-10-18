@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.tc
@@ -31,7 +35,6 @@ object Constraints {
 class Constraints(pipelineContext: PipelineContext) {
   import Constraints._
   private lazy val subtype = pipelineContext.subtype
-  private lazy val narrow = pipelineContext.narrow
   private lazy val util = pipelineContext.util
   private lazy val instantiate = pipelineContext.instantiate
   private implicit val pipelineCtx: PipelineContext = pipelineContext
@@ -46,7 +49,9 @@ class Constraints(pipelineContext: PipelineContext) {
     val Ctx(toSolve, varsToElim) = ctx
 
     if (seen((lower, upper))) Some(List(Map.empty))
-    else if (subtype.subType(lower, upper)) Some(List(Map.empty))
+    else if (subtype.gradualSubType(lower, upper)) Some(List(Map.empty))
+    else if (TypeVars.freeVars(upper).intersect(toSolve).isEmpty && subtype.subType(lower, upper))
+      Some(List(Map.empty))
     else
       (lower, upper) match {
         case (FreeVarType(n), _) if toSolve(n) =>
@@ -57,8 +62,6 @@ class Constraints(pipelineContext: PipelineContext) {
           assert(TypeVars.freeVars(lower).intersect(toSolve).isEmpty)
           val constraint = Constraint(TypeVars.promote(lower, varsToElim), AnyType)
           Some(List(Map(n -> constraint)))
-        case (FreeVarType(n1), FreeVarType(n2)) if n1 == n2 && !toSolve(n1) =>
-          Some(List(Map.empty))
         case (DynamicType, _) =>
           val solveFor = TypeVars.freeVars(upper).intersect(toSolve)
           Some(List(solveFor.map(n => (n, Constraint(DynamicType, AnyType))).toMap))
@@ -88,6 +91,10 @@ class Constraints(pipelineContext: PipelineContext) {
           constrain(st, ft11.resTy, ft2.resTy, seen)
         case (ft1: AnyArityFunType, ft2: AnyArityFunType) =>
           constrain(ctx, ft1.resTy, ft2.resTy, seen)
+        case (AnyFunType, ft2: FunType) if ft2.forall == 0 =>
+          constrain(ctx, DynamicType, ft2.resTy, seen)
+        case (AnyFunType, ft2: AnyArityFunType) =>
+          constrain(ctx, DynamicType, ft2.resTy, seen)
         case (UnionType(tys), _) =>
           constrainSeq(ctx, tys.map((_, upper)), seen)
         case (_, UnionType(tys)) =>
@@ -96,53 +103,52 @@ class Constraints(pipelineContext: PipelineContext) {
             None
           else
             Some(results.flatten)
-        case (r: RecordType, t: TupleType) =>
-          util.getRecord(r.module, r.name) match {
-            case Some(recDecl) =>
-              constrain(ctx, recordAsTuple(recDecl), t, seen)
-            case None =>
-              None
-          }
-        case (t: TupleType, r: RecordType) =>
-          util.getRecord(r.module, r.name) match {
-            case Some(recDecl) =>
-              constrain(ctx, t, recordAsTuple(recDecl), seen)
-            case None =>
-              None
-          }
-        case (r: RefinedRecordType, t: TupleType) =>
-          util.getRecord(r.recType.module, r.recType.name) match {
-            case Some(recDecl) =>
-              constrain(ctx, refinedRecordAsTuple(recDecl, r), t, seen)
-            case None =>
-              None
-          }
-        case (t: TupleType, r: RefinedRecordType) =>
-          util.getRecord(r.recType.module, r.recType.name) match {
-            case Some(recDecl) =>
-              constrain(ctx, t, refinedRecordAsTuple(recDecl, r), seen)
-            case None =>
-              None
-          }
-        case (r1: RefinedRecordType, r2: RefinedRecordType) =>
-          if (r1.recType == r2.recType)
-            util.getRecord(r1.recType.module, r1.recType.name) match {
-              case Some(recDecl) =>
-                constrain(ctx, refinedRecordAsTuple(recDecl, r1), refinedRecordAsTuple(recDecl, r2), seen)
-              case None =>
-                None
-            }
-          else
+        case (InterType(tys), _) =>
+          val results = tys.flatMap(constrain(ctx, _, upper, seen)).toList
+          if (results.isEmpty)
             None
+          else
+            Some(results.flatten)
+        case (_, InterType(tys)) =>
+          constrainSeq(ctx, tys.map((lower, _)), seen)
+        case (r: RecordType, t: TupleType) =>
+          val recDecl = util.getRecord(r.module, r.name)
+          constrain(ctx, recordAsTuple(recDecl), t, seen)
+        case (t: TupleType, r: RecordType) =>
+          val recDecl = util.getRecord(r.module, r.name)
+          constrain(ctx, t, recordAsTuple(recDecl), seen)
+        case (r: RefinedRecordType, t: TupleType) =>
+          val recDecl = util.getRecord(r.recType.module, r.recType.name)
+          constrain(ctx, refinedRecordAsTuple(recDecl, r), t, seen)
+        case (t: TupleType, r: RefinedRecordType) =>
+          val recDecl = util.getRecord(r.recType.module, r.recType.name)
+          constrain(ctx, t, refinedRecordAsTuple(recDecl, r), seen)
+        case (r: RecordType, rr: RefinedRecordType) if r == rr.recType =>
+          val recDecl = util.getRecord(r.module, r.name)
+          constrain(ctx, recordAsTuple(recDecl), refinedRecordAsTuple(recDecl, rr), seen)
+        case (rr: RefinedRecordType, r: RecordType) if r == rr.recType =>
+          val recDecl = util.getRecord(r.module, r.name)
+          constrain(ctx, refinedRecordAsTuple(recDecl, rr), recordAsTuple(recDecl), seen)
+        case (r1: RefinedRecordType, r2: RefinedRecordType) =>
+          if (r1.recType == r2.recType) {
+            val recDecl = util.getRecord(r1.recType.module, r1.recType.name)
+            constrain(ctx, refinedRecordAsTuple(recDecl, r1), refinedRecordAsTuple(recDecl, r2), seen)
+          } else None
+        case (NativeRecordType(id1), NativeRecordType(id2)) if id1 == id2 =>
+          constrainSeq(ctx, Nil, seen)
         case (TupleType(leftTys), TupleType(rightTys)) if leftTys.size == rightTys.size =>
           constrainSeq(ctx, leftTys.zip(rightTys), seen)
         case (ListType(leftElemTy), ListType(rightElemTy)) =>
           constrain(ctx, leftElemTy, rightElemTy, seen)
+        case (ConsType(lh, lt), ConsType(rh, rt)) =>
+          constrainSeq(ctx, List((lh, rh), (lt, rt)), seen)
+        case (ConsType(lh, lt), ListType(rightElemTy)) =>
+          constrainSeq(ctx, List((lh, rightElemTy), (lt, ListType(rightElemTy))), seen)
         case (MapType(props1, kT1, vT1), MapType(props2, kT2, vT2)) =>
           val tolerantSubtype = subtype.isDynamicType(kT1) && subtype.isDynamicType(vT1)
           var constraints: List[(Type, Type)] = List()
-          val reqKeys1 = props1.collect { case (k, Prop(true, _)) => k }.toSet
-          val reqKeys2 = props2.collect { case (k, Prop(true, _)) => k }.toSet
+          val reqKeys1 = props1.collect { case (k, MapProp(true, _)) => k }.toSet
+          val reqKeys2 = props2.collect { case (k, MapProp(true, _)) => k }.toSet
           if (!tolerantSubtype && !reqKeys2.subsetOf(reqKeys1)) return None
           for ((key1, prop1) <- props1) {
             props2.get(key1) match {
@@ -206,5 +212,5 @@ class Constraints(pipelineContext: PipelineContext) {
 
   /** Safe approximation because we re-check arg types once we have concrete param types
     */
-  private def meet(t1: Type, t2: Type): Type = narrow.meet(t1, t2)
+  private def meet(t1: Type, t2: Type): Type = subtype.meet(t1, t2)
 }

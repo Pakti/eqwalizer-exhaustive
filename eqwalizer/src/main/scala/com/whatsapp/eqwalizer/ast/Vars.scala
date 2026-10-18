@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -26,7 +30,7 @@ object Vars {
         Set.empty
       case PatCons(h, t) =>
         patVars(h) ++ patVars(t)
-      case PatNumber() | PatInt() =>
+      case PatInt() | PatFloat() =>
         Set.empty
       case PatAtom(_) =>
         Set.empty
@@ -42,6 +46,8 @@ object Vars {
         gen.toList.flatMap(patVars).toSet ++ fields.flatMap(f => patVars(f.pat)).toSet
       case PatRecordIndex(_, _) =>
         Set.empty
+      case PatNativeRecord(_, fields) =>
+        fields.flatMap(f => patVars(f.pat)).toSet
       case PatMap(kvs) =>
         kvs.flatMap(kv => patVars(kv._2)).toSet
     }
@@ -130,6 +136,12 @@ object Vars {
       exprVars(e)
     case RecordIndex(_, _) =>
       Set.empty
+    case NativeRecordCreate(_, fields) =>
+      fields.flatMap(f => exprVars(f.value)).toSet
+    case NativeRecordUpdate(e, _, fields) =>
+      exprVars(e) ++ fields.flatMap(f => exprVars(f.value))
+    case NativeRecordSelect(e, _, _) =>
+      exprVars(e)
     case MapCreate(kvs) =>
       kvs.flatMap(kv => List(kv._1, kv._2)).flatMap(exprVars).toSet
     case MapUpdate(m, kvs) =>
@@ -180,7 +192,7 @@ final class Vars(pipelineContext: PipelineContext) {
         List.empty
       case PatCons(h, t) =>
         patVarsL(h) ++ patVarsL(t)
-      case PatNumber() | PatInt() =>
+      case PatInt() | PatFloat() =>
         List.empty
       case PatAtom(_) =>
         List.empty
@@ -196,16 +208,14 @@ final class Vars(pipelineContext: PipelineContext) {
         val fieldsVars = fields.flatMap(f => patVarsL(f.pat))
         gen match {
           case Some(genPat) =>
-            val genFields =
-              util
-                .getRecord(module, recName)
-                .map(_.fields.size - fields.size)
-                .getOrElse(0)
+            val genFields = util.getRecord(module, recName).fields.size - fields.size
             fieldsVars ++ List.fill(genFields)(patVarsL(genPat)).flatten
           case None => fieldsVars
         }
       case PatRecordIndex(_, _) =>
         List.empty
+      case PatNativeRecord(_, fields) =>
+        fields.flatMap(f => patVarsL(f.pat))
       case PatMap(kvs) =>
         kvs.flatMap(kv => patVarsL(kv._2))
     }

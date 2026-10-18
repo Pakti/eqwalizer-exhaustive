@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 name := "eqwalizer-strict"
@@ -46,3 +50,11 @@ initialize := {
 assembly / assemblyJarName := "eqwalizer-strict.jar"
 
 assembly / mainClass  := Some("com.whatsapp.eqwalizer.Main")
+
+// Standalone regression tests for the fork and the imported type model.
+libraryDependencies += "org.scalameta" %% "munit" % "1.0.4" % Test
+libraryDependencies += "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.33.3" % Test
+
+Test / fork := true
+Test / javaOptions += "-Deqwalizer.mode=elp_cli"
+Test / parallelExecution := false

@@ -1,7 +1,11 @@
-/* Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
- * This source code is licensed under the Apache 2.0 license found in
- * the LICENSE file in the root directory of this source tree.
+ * This source code is dual-licensed under either the MIT license found in the
+ * LICENSE-MIT file in the root directory of this source tree or the Apache
+ * License, Version 2.0 found in the LICENSE-APACHE file in the root directory
+ * of this source tree. You may select, at your option, one of the
+ * above-listed licenses.
  */
 
 package com.whatsapp.eqwalizer.ast
@@ -72,18 +76,22 @@ object Exprs {
   case class RecordSelect(expr: Expr, recName: String, fieldName: String)(val pos: Pos) extends Expr
   case class RecordIndex(recName: String, fieldName: String)(val pos: Pos) extends Expr
 
+  enum NativeRecordName {
+    case Anon
+    case Qualified(id: RemoteId)
+  }
+  case class NativeRecordCreate(id: RemoteId, fields: List[RecordFieldNamed])(val pos: Pos) extends Expr
+  case class NativeRecordUpdate(expr: Expr, name: NativeRecordName, fields: List[RecordFieldNamed])(val pos: Pos)
+      extends Expr
+  case class NativeRecordSelect(expr: Expr, name: NativeRecordName, fieldName: String)(val pos: Pos) extends Expr
+
   case class MapCreate(kvs: List[(Expr, Expr)])(val pos: Pos) extends Expr
   case class MapUpdate(map: Expr, kvs: List[(Expr, Expr)])(val pos: Pos) extends Expr
 
   case class TypeCast(expr: Expr, ty: ExtType, checked: Boolean)(val pos: Pos) extends Expr
 
   case class Clause(pats: List[Pat], guards: List[Guard], body: Body)(val pos: Pos)
-  case class BinaryElem(
-      expr: Expr,
-      size: Option[Expr],
-      specifier: com.whatsapp.eqwalizer.ast.Specifier,
-  )(val pos: Pos)
-
+  case class BinaryElem(expr: Expr, size: Option[Expr], specifier: Specifier)(val pos: Pos)
   sealed trait RecordField {
     val value: Expr
   }
@@ -98,7 +106,7 @@ object Exprs {
   case class BGenerateStrict(pat: Pat, expr: Expr) extends Generator
   case class MGenerate(kPat: Pat, vPat: Pat, expr: Expr) extends Generator
   case class MGenerateStrict(kPat: Pat, vPat: Pat, expr: Expr) extends Generator
-  case class Zip(generators: List[Qualifier]) extends Generator
+  case class Zip(generators: List[Generator]) extends Generator
   case class Filter(expr: Expr) extends Qualifier
 
   case class ExtType(repr: Array[Byte])
