@@ -127,7 +127,39 @@ def run(command, cwd, env, timeout):
         raise Failure(f"Timed out after {timeout}s: {shlex.join(command)}\n{error.stderr or ''}") from error
 
 
-def stage(fixtures, work):
+def otp_dependencies(root):
+    """Expose a separate OTP source tree through ELP's custom-project manifest.
+
+    Source builds keep preloaded modules under erts/preloaded/src, whereas an
+    installed development tree commonly has lib/erts-VERSION/src instead.
+    Project dependencies take precedence over ELP's discovered OTP modules.
+    """
+    root = root.resolve()
+    libraries = root / "lib"
+    if not libraries.is_dir():
+        raise Failure(f"OTP source root must contain lib/: {root}")
+    apps = {}
+    for directory in sorted(libraries.iterdir()):
+        if not directory.is_dir() or not (directory / "src").is_dir():
+            continue
+        name = directory.name.split("-", 1)[0]
+        if name in apps:
+            raise Failure(f"Multiple source directories for OTP app {name}: {libraries}")
+        apps[name] = directory
+    preloaded = root / "erts/preloaded"
+    if (preloaded / "src/erlang.erl").is_file():
+        apps["erts"] = preloaded
+    for name, filename in [("erts", "erlang.erl"), ("kernel", "application.erl"), ("stdlib", "lists.erl")]:
+        if name not in apps or not (apps[name] / "src" / filename).is_file():
+            raise Failure(f"Incomplete OTP sources at {root}: cannot find {name}/src/{filename}. "
+                          "Pass --otp-source /path/to/the/matching/otp/source/root.")
+    return [{"name": name, "dir": str(directory), "src_dirs": ["src"],
+             "include_dirs": [str(directory / part) for part in ("include", "src")
+                              if (directory / part).is_dir()]}
+            for name, directory in sorted(apps.items())]
+
+
+def stage(fixtures, work, otp_sources=None):
     shutil.copytree(fixtures / "src", work / "src")
     if (fixtures / "include").exists():
         shutil.copytree(fixtures / "include", work / "include")
@@ -153,7 +185,8 @@ def stage(fixtures, work):
     # Re-read after inserting the export attribute so line scopes match staged code.
     tests = [test for path in sorted((work / "src").glob("*.erl")) for test in examples(path)]
     manifest = {"apps": [{"name": "eqwalizer_strict_features", "dir": ".",
-                           "src_dirs": ["src"], "include_dirs": ["include"]}], "deps": []}
+                           "src_dirs": ["src"], "include_dirs": ["include"]}],
+                "deps": otp_dependencies(otp_sources) if otp_sources else []}
     (work / "project.json").write_text(json.dumps(manifest), encoding="utf-8")
     return tests, probes, modules
 
@@ -171,14 +204,19 @@ def execute(args, work):
         raise Failure(f"Cannot run ELP: {version.stderr}")
     print(version.stdout.strip())
     otp = run([erl, "-noshell", "-eval",
-               'io:format("OTP ~s~n", [erlang:system_info(otp_release)]), '
-               'case filelib:is_file(filename:join(code:lib_dir(erts, src), "erlang.erl")) '
-               'of true -> halt(0); false -> halt(2) end.'], work, os.environ, 20)
+               'io:format("~s~n~s", [erlang:system_info(otp_release), code:root_dir()]), halt().'],
+              work, os.environ, 20)
     if otp.returncode:
-        raise Failure(f"Erlang runtime and OTP sources are required (install erlang-src):\n{otp.stderr}")
-    print(otp.stdout.strip())
+        raise Failure(f"Cannot query the selected Erlang runtime:\n{otp.stderr}")
+    try:
+        release, runtime_root = otp.stdout.strip().split("\n", 1)
+    except ValueError as error:
+        raise Failure(f"Unexpected Erlang runtime response: {otp.stdout!r}") from error
+    source_root = args.otp_source.resolve() if args.otp_source else None
+    print(f"OTP {release}; runtime root: {runtime_root}")
+    print(f"OTP source override: {source_root}" if source_root else "OTP sources: ELP automatic discovery")
     print(f"Checker: {jar}")
-    tests, probes, modules = stage(args.fixtures.resolve(), work)
+    tests, probes, modules = stage(args.fixtures.resolve(), work, source_root)
     wrapper = work / "checker"
     wrapper.write_text("#!" + sys.executable + "\n" + """import json, os, sys
 with open(os.environ['EQS_FEATURE_INVOCATIONS'], 'a') as log:
@@ -235,6 +273,10 @@ def main():
     parser.add_argument("--elp", default=os.environ.get("ELP", "elp"))
     parser.add_argument("--erl", default=os.environ.get("ERL", "erl"))
     parser.add_argument("--escript", default=os.environ.get("ESCRIPT", "escript"))
+    parser.add_argument("--otp-source", type=Path,
+                        default=Path(os.environ["OTP_SOURCE"]) if os.environ.get("OTP_SOURCE") else None,
+                        help="OTP source root containing lib/ and, for source builds, erts/preloaded/src; "
+                             "optional override; otherwise use ELP's normal OTP discovery")
     parser.add_argument("--java", default="java")
     parser.add_argument("--jar", type=Path, default=DEFAULT_JAR)
     parser.add_argument("--fixtures", type=Path, default=HERE)

@@ -29,7 +29,7 @@ See the [README](README.md) for the executable-wrapper setup.
 Validation includes 58 Scala regression tests, JAR assembly, five synthetic
 process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/exhaustiveness/README.md):
 45 source-based examples in eight modules, run through real ELP `2026-10-14` and
-OTP 27.3.4.1. Seven Python tests cover the source suite's runner. The maintainer
+OTP 27.3.4.1. Nine Python tests cover the source suite's runner. The maintainer
 also reported that the upgraded checker works locally. The complete upstream
 ELP/Erlang suite has not been run here; targeted feature tests do not replace it.
 
@@ -303,7 +303,7 @@ make test
 make build
 make smoke
 make jar-path
-make feature-test         # requires compatible ELP, OTP and OTP sources
+make feature-test         # uses your compatible ELP/OTP installation
 make feature-test-runner  # Python-only tests of the annotation/JSON adapter
 ```
 

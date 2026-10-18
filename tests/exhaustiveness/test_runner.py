@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from run import Failure, compare, diagnostics, examples, stage
+from run import Failure, compare, diagnostics, examples, otp_dependencies, stage
 
 
 class Expectations(unittest.TestCase):
@@ -61,6 +61,27 @@ class Expectations(unittest.TestCase):
             self.assertEqual(modules, ["example"])
             self.assertEqual(tests[0].start, 4)
             self.assertGreater(probes["example.erl"], tests[0].end)
+            manifest = json.loads((work / "project.json").read_text())
+            self.assertEqual(manifest["deps"], [])  # Default OTP discovery is untouched.
+
+    def test_separate_source_build_layout_is_supported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for relative in ["lib/kernel/src/application.erl", "lib/stdlib/src/lists.erl",
+                             "erts/preloaded/src/erlang.erl"]:
+                path = root / relative
+                path.parent.mkdir(parents=True)
+                path.write_text("", encoding="utf-8")
+            apps = {app["name"]: app for app in otp_dependencies(root)}
+            self.assertEqual(set(apps), {"erts", "kernel", "stdlib"})
+            self.assertEqual(apps["erts"]["dir"], str(root / "erts/preloaded"))
+
+    def test_incomplete_explicit_source_override_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib").mkdir()
+            with self.assertRaisesRegex(Failure, "Incomplete OTP sources"):
+                otp_dependencies(root)
 
 
 if __name__ == "__main__":

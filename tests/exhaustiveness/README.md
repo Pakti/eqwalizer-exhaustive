@@ -7,18 +7,35 @@ acceptance tests; they do not alter or depend on upstream's test suite.
 
 ## Run on Linux Mint
 
-You need Java 11+, sbt 1.10.10, Python 3.9+, Erlang/OTP, its source package, and ELP.
+You need Java 11+, sbt 1.10.10, Python 3.9+, Erlang/OTP and ELP.
 The tested combination is ELP **2026-10-14** and OTP **27.3.4.1** on Linux x86_64.
-Use an ELP release asset built for your installed OTP major version. Linux Mint's
-default Erlang package may be older than the versions supported by that release;
-install a matching OTP version first rather than mixing incompatible releases.
+Use an ELP release asset built for your OTP major version. Use the same `erl` and
+`escript` as your working ELP installation, including a source-built installation.
+No system package installation is required by the tests.
 
-On a Mint system with a compatible Erlang package source, the relevant packages
-are `erlang-base`, `erlang-dev`, `erlang-parsetools`, `erlang-syntax-tools`, and
-`erlang-src`. A complete Erlang development installation is also suitable.
-`erl` and `escript` must be executable; ELP needs OTP sources such as `erlang.erl`
-to resolve built-in types. No rebar3, network package dependencies, Rust checkout,
-or changes to ELP are required to run the fixtures.
+By default, the runner leaves OTP source discovery to ELP, just like a normal
+`elp eqwalize-all` invocation. ELP queries the selected runtime's root directory
+and indexes the OTP sources available there for module types and specs. You do
+not normally need to pass their location explicitly. The previous runner's
+check for one installed-source layout was unnecessarily restrictive and has been
+removed. No rebar3, network package dependencies, Rust checkout or ELP changes
+are needed to run the fixtures.
+
+If your matching OTP source tree is separate from the runtime installation and
+ELP's default discovery is insufficient, use an optional source-root override:
+
+```sh
+OTP_SOURCE=/path/to/otp-source make feature-test
+```
+
+Or pass `--otp-source /path/to/otp-source` to the runner. This is the root of the
+matching Erlang/OTP source checkout, containing `lib/` and
+`erts/preloaded/src/erlang.erl`, not your application's source directory. An
+installed development tree with `lib/erts-VERSION/src/erlang.erl` is also accepted.
+The runner adds source apps as dependencies in its temporary ELP manifest; it
+does not install packages, copy sources into your runtime, or modify the OTP tree.
+Keep the source tree and selected runtime version aligned. The normal automatic
+path does not add these overrides or impose this directory layout.
 
 Install the [pinned ELP release](https://github.com/WhatsApp/erlang-language-platform/releases/tag/2026-10-14)
 and verify the downloaded asset's published SHA-256. With the tools on PATH, run
@@ -119,7 +136,7 @@ execution probes. It is targeted integration coverage for our features, not a
 replacement for upstream's complete ELP tests. Internal type-operation and
 scanner edge cases remain in the existing Scala tests, which are unchanged.
 
-The annotation/JSON adapter has its own seven Python tests, runnable without
+The annotation/JSON adapter has its own nine Python tests, runnable without
 Java, Erlang or ELP:
 
 ```sh
