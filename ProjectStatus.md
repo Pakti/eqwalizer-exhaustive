@@ -1,16 +1,17 @@
 # Project status: eqwalizer-strict
 
-Last reviewed against the code: 2026-10-18.
+Last reviewed against the code: 2026-11-16.
 
-Current upgrade branch: `upgrade/elp-2026-10-14-corrected-main`.
-Fork baseline: `353831ebdf45bd3d0f264d8ffd3cac6d9d83aa45`.
-Upstream baseline: ELP tag `2026-10-14`, commit
-`b36ba37346a8e6122fd309420cb67886ccc5871c`.
+Current upgrade branch: `upgrade/elp-2026-11-16`.
+Fork baseline: `c9ccceeab15a09c10bb211e03e8f50f88a330933`.
+Upstream baseline: ELP tag `2026-11-16`, commit
+`45a9286a9ebb09c04b1daa77834ca9833fb4b0dd`.
 
 The customizations originated on feature branches and were merged into the fork's
 `main`. The upgraded implementation is on the branch above; this document does
 not imply that the upgrade has been merged into `main`.
-See the [upgrade report](docs/upstream-upgrade-2026-10-14.md) for history,
+The October upgrade is already merged into `main`; this branch contains the
+November delta. See the [upgrade report](docs/upstream-upgrade-2026-11-16.md) for history,
 conflict resolutions, removed compatibility code, and future upgrade procedures.
 
 ## Current status
@@ -28,7 +29,7 @@ See the [README](README.md) for the executable-wrapper setup.
 
 Validation includes 58 Scala regression tests, JAR assembly, five synthetic
 process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/exhaustiveness/README.md):
-45 source-based examples in eight modules, run through real ELP `2026-10-14` and
+49 source-based examples in nine modules, run through real ELP `2026-11-16` and
 OTP 27.3.4.1. Nine Python tests cover the source suite's runner. The maintainer
 also reported that the upgraded checker works locally. The complete upstream
 ELP/Erlang suite has not been run here; targeted feature tests do not replace it.
@@ -314,8 +315,8 @@ variance replies and free-variable constraints. `make smoke` assembles the JAR a
 runs five process tests using synthetic ELP replies, checking diagnostics,
 suppression and private-constructor enforcement. The original CI workflow runs
 these standalone Scala/IPC checks. The separate feature workflow additionally runs real ELP source
-checks using a pinned prebuilt release; neither builds an external ELP checkout
-or a native image.
+checks using an exact-tag ELP source build. The source build uses the fork JAR
+through ELP's supported override; it does not require a GraalVM native image.
 
 The fork's behavioral examples now live in executable Erlang source rather than
 being duplicated here. Each `%% @test` region contains an explanation and exact
@@ -329,6 +330,7 @@ expected diagnostics (or `%% @expect-clean`):
 | Supported and unsupported guard refinements | [simple_guards.erl](tests/exhaustiveness/src/simple_guards.erl) |
 | Per-function suppression | [strict_directives.erl](tests/exhaustiveness/src/strict_directives.erl) |
 | Invalid directive diagnostics | [invalid_directives.erl](tests/exhaustiveness/src/invalid_directives.erl) |
+| November OTP spec compatibility | [release_compatibility.erl](tests/exhaustiveness/src/release_compatibility.erl) |
 | Private constructors through shared headers | [box_owner.erl](tests/exhaustiveness/src/box_owner.erl), [box_client.erl](tests/exhaustiveness/src/box_client.erl), [private_box.hrl](tests/exhaustiveness/include/private_box.hrl) |
 
 The source suite is isolated under `tests/exhaustiveness/`, with its own Python runner

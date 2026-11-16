@@ -151,13 +151,6 @@ final class Occurrence(pipelineContext: PipelineContext) {
 
   // Basic heuristic to check coverage of a single clause in isolation
   def clauseCovered(clause: Clause, argTys: List[Type]): Boolean = {
-    val hasComplexPattern = clause.pats.exists {
-      case PatWild() => false
-      case PatVar(_) => false
-      case _         => true
-    }
-    if (!hasComplexPattern && clause.guards.isEmpty)
-      return true
     val env = clausesEnvs(List(clause), argTys, Map()).head
     !env.exists { case (_, ty) => Subtype.isNoneType(ty) }
   }
@@ -207,7 +200,7 @@ final class Occurrence(pipelineContext: PipelineContext) {
     val clauseEnvs = ListBuffer.empty[Env]
     for (clause <- c.clauses) {
       val pat = clause.pats.head
-      val info = patProps(x, Nil, pat, env)
+      val info = patProps(x, Nil, pat, env1)
       val (patPos, patNeg) =
         pat match {
           case PatVar(`x`) => (None, None)
