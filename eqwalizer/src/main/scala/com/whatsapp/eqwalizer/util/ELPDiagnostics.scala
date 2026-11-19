@@ -15,18 +15,13 @@ import com.whatsapp.eqwalizer.ast.InvalidDiagnostics.Invalid
 import com.whatsapp.eqwalizer.ast.{InvalidDiagnostics, Pos, Show}
 import com.whatsapp.eqwalizer.ast.stub.Db
 import com.whatsapp.eqwalizer.io.Ipc
-import com.whatsapp.eqwalizer.tc.TcDiagnostics.{NonExhaustiveCase, RedundantFixme}
-import com.whatsapp.eqwalizer.tc.{Options, TcDiagnostics, TypeInfo, noOptions}
+import com.whatsapp.eqwalizer.tc.TcDiagnostics.RedundantFixme
+import com.whatsapp.eqwalizer.tc.{Options, StrictDiagnostics, TcDiagnostics, TypeInfo, noOptions}
 import com.github.plokhotnyuk.jsoniter_scala.core.*
 import com.github.plokhotnyuk.jsoniter_scala.macros.{CodecMakerConfig, JsonCodecMaker}
 import com.whatsapp.eqwalizer.util.Diagnostic.Diagnostic
 
 object ELPDiagnostics {
-  private val UnstructuredDiagnosticNames = Set(
-    "private_constructor_violation",
-    "invalid_private_constructor",
-  )
-
   case class Error(
       range: Option[Pos.TextRange],
       message: String,
@@ -83,9 +78,7 @@ object ELPDiagnostics {
 
   private def structuredDiagnostic(d: Diagnostic): Option[StructuredDiagnostic] =
     d match {
-      case _: NonExhaustiveCase =>
-        None
-      case te: TcDiagnostics.TypeError if UnstructuredDiagnosticNames(te.errorName) =>
+      case _: StrictDiagnostics.Unstructured =>
         None
       case te: TcDiagnostics.TypeError =>
         Some(StructuredDiagnostic.TypeError(te))

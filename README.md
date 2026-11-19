@@ -99,3 +99,6 @@ including:
 
 Imported upstream files carry [Apache](LICENSE-APACHE) / [MIT](LICENSE-MIT) dual-license notices.
 Existing fork contributions retain their original [Apache](LICENSE) notices.
+
+For future upstream imports, see the [synchronization workflow](docs/synchronization.md)
+and the authoritative [baseline metadata](upstream.json).

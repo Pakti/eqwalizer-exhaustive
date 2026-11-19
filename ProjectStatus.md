@@ -2,17 +2,11 @@
 
 Last reviewed against the code: 2026-11-19.
 
-Current upgrade branch: `upgrade/elp-2026-11-19`.
-Fork starting main: `c9ccceeab15a09c10bb211e03e8f50f88a330933`; the validated
-November 16 branch (`235b764f`) is included in this synchronization.
-Upstream baseline: ELP tag `2026-11-19`, commit
-`08c6a40b9f09d66e69e23d0154a30e4582ce4f07`.
-
-The October upgrade and the custom features were already on `main`. This
-synchronization includes the November 16 upgrade and the November 19 delta,
-prepared on the branch above and merged into `main` after validation.
-See the [upgrade report](docs/upstream-upgrade-2026-11-19.md) for protocol changes,
-customization adaptations, validation and remaining limits.
+The imported upstream baseline and tested ELP/OTP combination are recorded in
+[`upstream.json`](upstream.json). The latest synchronization is ELP `2026-11-19`,
+merged into `main` and tagged `elp-2026-11-19`. See the
+[upgrade report](docs/upstream-upgrade-2026-11-19.md) for exact commits, protocol
+changes, customization adaptations, validation and remaining limits.
 
 ## Current status
 
@@ -278,9 +272,13 @@ unreadable paths produce `unreadable_eqwalizer_strict_file`. The scanner reads r
 UTF-8 source and uses line patterns, not a complete Erlang parser. It accepts
 comment directives rather than `-eqwalizer_strict(...)` attributes.
 
-`Pipeline.checkForms` loads and merges directives, applies owners during checking,
-and filters disabled diagnostics per function. The `ipc-check-funs` entry point
-calls `Pipeline.checkFunction` directly and does not load source comments; this
+`Pipeline.checkForms` delegates directive loading/merging and function-scoped
+filtering to fork-owned `StrictDirectives`. Record construction/update hooks in
+`Elab` call `StrictPrivateConstructors`; `Util` remains identical to upstream.
+Custom record/case diagnostics live in `StrictDiagnostics`, outside upstream's
+sealed `TcDiagnostics.TypeError` hierarchy. Their `Unstructured` marker keeps
+unsupported structured ELP payloads omitted, with codes/messages unchanged.
+The `ipc-check-funs` entry point calls `Pipeline.checkFunction` directly and does not load source comments; this
 is an existing difference from full-module checking. The retained
 `PrivateConstructorsManifest` helper has no callers in the active pipeline.
 
@@ -368,3 +366,13 @@ override and run real projects and upstream ELP fixtures as described in the REA
 - Extend the source-based suite as features change, and run the broader upstream
   ELP suite separately. Spec-driven call-result specialization and support for
   overloaded specs remain separate feature work.
+
+## Synchronization maintenance
+
+[`upstream.json`](upstream.json) records the imported baseline and tested ELP/OTP
+combination; CI consumes that metadata. The fork-owned
+[synchronization tool and workflow](docs/synchronization.md) report subtree and
+external integration changes, identify overlapping fork edits, and generate or
+three-way apply an upstream-to-upstream subtree patch. Offline Git fixtures run
+with `make test-sync`. This maintenance refactoring preserves checker behavior;
+exhaustiveness traversal and known-limit expectations are unchanged.

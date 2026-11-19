@@ -14,8 +14,7 @@ import com.whatsapp.eqwalizer.ast.Show.show
 import com.whatsapp.eqwalizer.ast.Specifier
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.{Id, Pos}
-import com.whatsapp.eqwalizer.tc.TcDiagnostics.NonExhaustiveCase
-import com.whatsapp.eqwalizer.util.Diagnostic.Diagnostic
+import com.whatsapp.eqwalizer.tc.StrictDiagnostics.NonExhaustiveCase
 
 final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private lazy val module = pipelineContext.module
@@ -25,25 +24,25 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private implicit val pipelineCtx: PipelineContext = pipelineContext
 
-  private case class NonExhaustiveFunction(pos: Pos, id: String, uncovered: Type) extends Diagnostic {
+  private case class NonExhaustiveFunction(pos: Pos, id: String, uncovered: Type) extends StrictDiagnostics.Unstructured {
     override val msg: String = s"Function $id does not handle: ${show(uncovered)}"
     override val errorName: String = "non_exhaustive_function"
     override val erroneousExpr: Option[Expr] = None
   }
 
-  private case class NonExhaustiveFunctionText(pos: Pos, id: String, uncovered: String) extends Diagnostic {
+  private case class NonExhaustiveFunctionText(pos: Pos, id: String, uncovered: String) extends StrictDiagnostics.Unstructured {
     override val msg: String = s"Function $id does not handle: $uncovered"
     override val errorName: String = "non_exhaustive_function"
     override val erroneousExpr: Option[Expr] = None
   }
 
-  private case class NonExhaustiveCaseText(pos: Pos, uncovered: String) extends Diagnostic {
+  private case class NonExhaustiveCaseText(pos: Pos, uncovered: String) extends StrictDiagnostics.Unstructured {
     override val msg: String = s"Case expression does not handle: $uncovered"
     override val errorName: String = "non_exhaustive_case"
     override val erroneousExpr: Option[Expr] = None
   }
 
-  private case class SkippedExhaustivenessCheck(pos: Pos, subject: String, reason: String) extends Diagnostic {
+  private case class SkippedExhaustivenessCheck(pos: Pos, subject: String, reason: String) extends StrictDiagnostics.Unstructured {
     override val msg: String = s"Skipped exhaustiveness check for $subject: $reason"
     override val errorName: String = "skipped_exhaustiveness_check"
     override val erroneousExpr: Option[Expr] = None

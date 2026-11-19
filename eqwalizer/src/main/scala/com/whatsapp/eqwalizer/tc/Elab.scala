@@ -11,12 +11,12 @@
 package com.whatsapp.eqwalizer.tc
 
 import com.whatsapp.eqwalizer.ast.Exprs.*
-import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec, RecDecl, NativeRecField, OverloadedFunSpec}
+import com.whatsapp.eqwalizer.ast.Forms.{FunDecl, FunSpec, NativeRecField, OverloadedFunSpec}
 import com.whatsapp.eqwalizer.ast.Guards.Guard
 import com.whatsapp.eqwalizer.ast.Pats.{PatMatch, PatVar}
 import com.whatsapp.eqwalizer.ast.Types.*
 import com.whatsapp.eqwalizer.ast.stub.Db
-import com.whatsapp.eqwalizer.ast.{Specifier, Filters, Pats, Pos, RemoteId, Vars}
+import com.whatsapp.eqwalizer.ast.{Specifier, Filters, Pats, RemoteId, Vars}
 import com.whatsapp.eqwalizer.tc.TcDiagnostics.*
 
 final class Elab(pipelineContext: PipelineContext) {
@@ -34,18 +34,6 @@ final class Elab(pipelineContext: PipelineContext) {
   private lazy val diagnosticsInfo = pipelineContext.diagnosticsInfo
   private lazy val instantiate = pipelineContext.instantiate
   private implicit val pipelineCtx: PipelineContext = pipelineContext
-
-  private def checkPrivateConstructor(pos: Pos, recDecl: RecDecl): Unit =
-    util.privateConstructorOwnersFor(recDecl.name).toList.sorted match {
-      case Nil =>
-        ()
-      case owner :: Nil if owner != module =>
-        diagnosticsInfo.add(PrivateConstructorViolation(pos, recDecl.name, owner))
-      case _ :: Nil =>
-        ()
-      case owners =>
-        diagnosticsInfo.add(InvalidPrivateConstructor(pos, recDecl.name, s"multiple owner modules: ${owners.mkString(", ")}"))
-    }
 
   def checkFun(f: FunDecl, spec: FunSpec): Unit = {
     val (_, FunType(_, argTys, resTy)) = instantiate.instantiate(spec.ty)
@@ -714,7 +702,7 @@ final class Elab(pipelineContext: PipelineContext) {
     val namedFields = fields.collect { case n: RecordFieldNamed => n }
     val genFieldOpt = fields.collectFirst { case g: RecordFieldGen => g }
     val recDecl = util.getRecord(module, recName)
-    checkPrivateConstructor(rCreate.pos, recDecl)
+    StrictPrivateConstructors.check(pipelineContext, rCreate.pos, recDecl.name)
     var refinedFields: Map[String, Type] = Map.empty
 
     var envAcc = env
@@ -765,7 +753,7 @@ final class Elab(pipelineContext: PipelineContext) {
     val RecordUpdate(recExpr, recName, fields) = rUpdate
     val recType = RecordType(recName)(module)
     val recDecl = util.getRecord(module, recName)
-    checkPrivateConstructor(rUpdate.pos, recDecl)
+    StrictPrivateConstructors.check(pipelineContext, rUpdate.pos, recDecl.name)
     var refinedFields: Map[String, Type] = Map.empty
     val (refTy, refEnv) = elabExpr(recExpr, env, recType)
     if (recDecl.refinable) {

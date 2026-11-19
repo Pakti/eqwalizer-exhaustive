@@ -73,18 +73,6 @@ object TcDiagnostics {
     def errorName = "undefined_anon_native_record_field"
     override def erroneousExpr: Option[Expr] = None
   }
-  case class PrivateConstructorViolation(pos: Pos, recName: String, owner: String) extends TypeError {
-    override val msg: String =
-      s"Cannot construct #$recName{} outside its private constructor owner module $owner"
-    def errorName = "private_constructor_violation"
-    override def erroneousExpr: Option[Expr] = None
-  }
-  case class InvalidPrivateConstructor(pos: Pos, recName: String, reason: String) extends TypeError {
-    override val msg: String =
-      s"Invalid private constructor declaration for #$recName{}: $reason"
-    def errorName = "invalid_private_constructor"
-    override def erroneousExpr: Option[Expr] = None
-  }
   case class UnboundVar(pos: Pos, n: String) extends TypeError {
     override val msg: String = s"Unbound var: ${n}"
     def errorName = "unbound_var"
@@ -168,12 +156,6 @@ object TcDiagnostics {
   case class ClauseNotCovered(pos: Pos) extends TypeError {
     override val msg: String = "Clause is not covered by spec"
     val errorName = "clause_not_covered"
-    override val erroneousExpr: Option[Expr] = None
-  }
-  case class NonExhaustiveCase(pos: Pos, uncovered: Type)(implicit val pipelineContext: PipelineContext)
-      extends TypeError {
-    override val msg: String = s"Case expression does not handle: ${show(uncovered)}"
-    val errorName = "non_exhaustive_case"
     override val erroneousExpr: Option[Expr] = None
   }
   case class AmbiguousLambda(pos: Pos, expr: Expr, expected: Type)(implicit

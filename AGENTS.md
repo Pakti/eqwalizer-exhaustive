@@ -20,18 +20,11 @@ This repository is a standalone customized fork of
 subtree maps to this repository's root**. Consequently upstream's Scala project
 `eqwalizer/eqwalizer/` maps to our `eqwalizer/`.
 
-As of 2026-11-19, the recorded baseline is:
-
-- Upstream tag: `2026-11-19`.
-- Full upstream commit: `08c6a40b9f09d66e69e23d0154a30e4582ce4f07`.
-- Upstream subtree tree: `bca61becd0e95e83ac9446375b566007c54d6323`.
-- Fork release tag: `elp-2026-11-19`.
-- Report: [November 19 synchronization](docs/upstream-upgrade-2026-11-19.md).
-
-Verify this information against the repository and latest report before the next
-upgrade. Update it when the baseline changes. A future machine-readable baseline
-file should become the authority instead of duplicating independently maintained
-pins across docs and CI.
+[`upstream.json`](upstream.json) is the authoritative imported baseline and
+separately records the tested ELP/OTP combination. CI reads its ELP pin from it.
+See [the synchronization guide](docs/synchronization.md) for the review/apply tool
+and [the November 19 report](docs/upstream-upgrade-2026-11-19.md) for provenance.
+Do not maintain another independent current-baseline pin here.
 
 For an upgrade:
 
@@ -44,9 +37,15 @@ For an upgrade:
    customized fork and upstream:
 
    ```sh
-   git diff --binary OLD_SHA:eqwalizer NEW_SHA:eqwalizer > /tmp/eqwalizer-upstream.patch
-   git apply --3way /tmp/eqwalizer-upstream.patch
+   python3 scripts/sync-upstream.py refs/tags/NEW_RELEASE --fetch
+   python3 scripts/sync-upstream.py FULL_TARGET_SHA --patch /tmp/eqwalizer-upstream.patch
+   python3 scripts/sync-upstream.py FULL_TARGET_SHA --apply
    ```
+
+   The patch is subtree-to-subtree; `--apply` uses `git apply --3way`. Review the
+   report first; conflicts remain available for manual resolution. The tool never
+   advances metadata automatically. Update imported and tested fields only when
+   their respective review/validation has actually completed.
 
 4. Review overlapping custom hooks, deletions, AST changes, build dependencies and
    support-library specs. Preserve feature intent rather than choosing one side
@@ -120,6 +119,7 @@ Run commands from the repository root:
 | `make test-upstream` | Existing Scala tests, including fork-added tests; not the complete upstream ELP suite. |
 | `make test` | Build, run the Scala suite, and run the real Erlang-source suite. |
 | `make test-runner` | Python-only tests of annotations and diagnostic matching. |
+| `make test-sync` | Offline Git integration tests for synchronization tooling. |
 | `make smoke` | Build and run synthetic process/IPC checks. |
 
 Prefer literate `.erl` acceptance examples under `tests/exhaustiveness/` for
@@ -160,8 +160,10 @@ daemon/LSP, native packaging, another OTP major or GitHub CI passed unless run.
 
 ## Reducing future synchronization work
 
-Favor small integration calls into fork-owned helpers over large modifications
-to `Pipeline`, `Elab`, `Util` and diagnostic registries. Keep the necessary
+`StrictDirectives`, `StrictPrivateConstructors` and `StrictDiagnostics` own the
+custom directive, constructor and diagnostic integration. `Util` and
+`TcDiagnostics` match upstream. Keep hooks in `Pipeline`, `Elab`, `tc/package`
+and `ELPDiagnostics` short, and keep the necessary
 diagnostic serialization adapter explicit. Refactor only with behavior-preserving
 regressions; do not change diagnostic timing, filtering, ownership or options as
 an incidental cleanup.

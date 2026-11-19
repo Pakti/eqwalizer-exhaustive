@@ -47,3 +47,8 @@ clean:
 
 .PHONY: rebuild
 rebuild: clean build
+
+# Offline Git fixtures for the fork-owned synchronization workflow.
+.PHONY: test-sync
+test-sync:
+	python3 -m unittest discover -s "$(REPO)/tests/synchronization" -p 'test_*.py'

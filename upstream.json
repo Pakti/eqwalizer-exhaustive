@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/WhatsApp/erlang-language-platform.git",
+  "commit": "08c6a40b9f09d66e69e23d0154a30e4582ce4f07",
+  "subtree": "eqwalizer",
+  "tree": "bca61becd0e95e83ac9446375b566007c54d6323",
+  "release": "2026-11-19",
+  "tested_elp": {
+    "commit": "08c6a40b9f09d66e69e23d0154a30e4582ce4f07",
+    "release": "2026-11-19",
+    "otp": "27.3.4.1"
+  }
+}

@@ -14,9 +14,29 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: sbt/setup-sbt@v1
+      - name: Read the tested ELP baseline
+        id: upstream
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, re
+          from pathlib import Path
+          from urllib.parse import urlparse
+          baseline = json.loads(Path('upstream.json').read_text())
+          assert baseline['schema_version'] == 1
+          repository = urlparse(baseline['repository'])
+          assert repository.scheme == 'https' and repository.netloc == 'github.com'
+          slug = repository.path.strip('/').removesuffix('.git')
+          assert re.fullmatch(r'[\w.-]+/[\w.-]+', slug)
+          tested = baseline['tested_elp']
+          assert re.fullmatch(r'[0-9a-f]{40}', tested['commit'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + slug, file=output)
+              print('commit=' + tested['commit'], file=output)
+              print('otp=' + tested['otp'], file=output)
+          PYTHON
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '27.3.4.1'
+          otp-version: ${{ steps.upstream.outputs.otp }}
           rebar3-version: '3.24.0'
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -24,12 +44,12 @@ jobs:
       - name: Check out the pinned ELP source
         uses: actions/checkout@v4
         with:
-          repository: WhatsApp/erlang-language-platform
-          ref: 08c6a40b9f09d66e69e23d0154a30e4582ce4f07
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.commit }}
           path: .upstream-elp
           persist-credentials: false
       - name: Build the fork and test its runner
-        run: make build test-runner
+        run: make build test-runner test-sync
       # Build the exact release source for OTP 27, including its parser/protocol
       # changes, instead of relying on a binary built for another OTP major.
       - name: Build the pinned ELP release
@@ -37,11 +57,11 @@ jobs:
         working-directory: .upstream-elp
         env:
           ELP_EQWALIZER_PATH: ${{ github.workspace }}/eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar
-          SOURCE_DATE_EPOCH: '1795033572'
           CARGO_BUILD_JOBS: '2'
           CARGO_PROFILE_DEV_DEBUG: '0'
         run: |
           set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           cargo build --locked -p elp --bin elp
           echo "$PWD/target/debug" >> "$GITHUB_PATH"
       - name: Run literate Erlang examples

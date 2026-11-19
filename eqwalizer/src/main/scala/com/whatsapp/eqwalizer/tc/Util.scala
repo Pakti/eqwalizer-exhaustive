@@ -20,12 +20,6 @@ class Util(pipelineContext: PipelineContext) {
   private var recordCache: Map[(String, String), Option[RecDecl]] = Map.empty
   private var nativeRecordCache: Map[(String, String), Option[NativeRecDecl]] = Map.empty
 
-  private lazy val privateConstructorOwners: Map[String, Set[String]] =
-    pipelineContext.options.privateConstructorOwners
-
-  def privateConstructorOwnersFor(recordName: String): Set[String] =
-    privateConstructorOwners.getOrElse(recordName, Set.empty)
-
   def globalFunId(module: String, id: Id): RemoteId = {
     val imports = Db.getImports(module).get
     val hostModule = imports.getOrElse(id, module)
