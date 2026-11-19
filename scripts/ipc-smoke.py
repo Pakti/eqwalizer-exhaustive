@@ -23,7 +23,7 @@ def node(kind, **fields):
 
 
 def clause(pat, expr=None):
-    return {"pos": POS, "pats": [pat], "guards": [],
+    return {"pos": POS, "pats": [node("SPat", pat=pat)], "guards": [],
             "body": {"exprs": [expr or node("AtomLit", s="ok")]}}
 
 

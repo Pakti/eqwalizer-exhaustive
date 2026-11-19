@@ -8,7 +8,7 @@ acceptance tests; they do not alter or depend on upstream's test suite.
 ## Run on Linux Mint
 
 You need Java 11+, sbt 1.10.10, Python 3.9+, Erlang/OTP and ELP.
-The tested combination is ELP **2026-10-14** and OTP **27.3.4.1** on Linux x86_64.
+The tested combination is ELP **2026-11-19** and OTP **27.3.4.1** on Linux x86_64.
 Use an ELP release asset built for your OTP major version. Use the same `erl` and
 `escript` as your working ELP installation, including a source-built installation.
 No system package installation is required by the tests.
@@ -25,7 +25,8 @@ If your matching OTP source tree is separate from the runtime installation and
 ELP's default discovery is insufficient, use an optional source-root override:
 
 ```sh
-OTP_SOURCE=/path/to/otp-source make test
+OTP_SOURCE=/path/to/otp-source make clean  # once when switching upstream AST/protocol baselines
+make test
 ```
 
 Or pass `--otp-source /path/to/otp-source` to the runner. This is the root of the
@@ -37,9 +38,17 @@ does not install packages, copy sources into your runtime, or modify the OTP tre
 Keep the source tree and selected runtime version aligned. The normal automatic
 path does not add these overrides or impose this directory layout.
 
-Install the [pinned ELP release](https://github.com/WhatsApp/erlang-language-platform/releases/tag/2026-10-14)
-and verify the downloaded asset's published SHA-256. With the tools on PATH, run
-from the repository root:
+Install the [pinned ELP release](https://github.com/WhatsApp/erlang-language-platform/releases/tag/2026-11-19)
+and verify the downloaded asset's published SHA-256, if binary assets are available.
+For the OTP 27 validation configuration, validation and CI
+built ELP directly from commit `08c6a40b9f09d66e69e23d0154a30e4582ce4f07` using
+Rust 1.100.0, rebar3 3.24.0 and `cargo build --locked -p elp --bin elp`.
+`ELP_EQWALIZER_PATH` was set at build time to this fork's assembled JAR, avoiding
+ELP's native-image build. See the [upgrade report](../../docs/upstream-upgrade-2026-11-19.md)
+for the exact source-build procedure. Rust/rebar3 are needed only if building ELP,
+not when running the suite with an existing compatible ELP executable.
+
+With the tools on PATH, run from the repository root:
 
 ```sh
 make test
@@ -124,6 +133,8 @@ limitation, change its explanatory prose and expectation together with the code.
 | Source | Executable documentation |
 | --- | --- |
 | [exhaustiveness.erl](src/exhaustiveness.erl) | Atom/case/function coverage, interesting arguments, catch-alls, products and limits, tagged tuples, basic guards, generic aliases, coarse numeric and repeated-variable limitations. |
+| [november19_compatibility.erl](src/november19_compatibility.erl) | Comprehension templates and sharpened ordered-dictionary/filelib results. |
+| [release_compatibility.erl](src/release_compatibility.erl) | November ordered-dictionary and regex spec compatibility, including a deliberately invalid result type. |
 | [binary_coverage.erl](src/binary_coverage.erl) | Empty/nonempty binary coverage and unsupported exact sizes. |
 | [selector_calls.erl](src/selector_calls.erl) | Local, remote and dynamic call selectors, declared results, unknown selectors. |
 | [simple_guards.erl](src/simple_guards.erl) | Record guards, aliases, numeric guards and unsupported conjunctions. |
@@ -131,7 +142,7 @@ limitation, change its explanatory prose and expectation together with the code.
 | [invalid_directives.erl](src/invalid_directives.erl) | Unsupported suppression targets, adjacency and comment-only syntax. |
 | [box_owner.erl](src/box_owner.erl), [box_client.erl](src/box_client.erl), [private_box.hrl](include/private_box.hrl) | Ownership enforced from a shared header, creation/update permissions, permitted field access and pattern matching. |
 
-The suite currently has **45 examples in eight modules**, with eight additional
+The suite currently has **53 examples in ten modules**, with ten additional
 execution probes. It is targeted integration coverage for our features, not a
 replacement for upstream's complete ELP tests. Internal type-operation and
 scanner edge cases remain in the existing Scala tests, which are unchanged.
@@ -144,6 +155,6 @@ make test-runner
 ```
 
 The independent [feature CI workflow](../../.github/workflows/features.yml)
-installs a compatible OTP/ELP pair and runs these source tests. Future upgrades
+installs OTP and builds the exact pinned ELP source before running these tests. Future upgrades
 should usually need changes only to the CLI adapter in `run.py` and the ELP pin;
 the documented behavior stays in the Erlang source files.

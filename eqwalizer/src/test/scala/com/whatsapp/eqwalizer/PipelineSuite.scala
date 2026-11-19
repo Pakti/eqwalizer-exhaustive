@@ -64,7 +64,8 @@ class PipelineSuite extends munit.FunSuite {
       val id = Id("f", 1)
       val ty = UnionType(Set(AtomLitType("a"), AtomLitType("b")))
       val spec = FunSpec(id, FunType(0, List(ty), AtomLitType("ok")))
-      val fun = FunDecl(id, List(Clause(List(PatAtom("a")(pos)), Nil, Body(List(AtomLit("ok")(pos))))(pos)))(pos)
+      val fun =
+        FunDecl(id, List(Clause(List(SPat(PatAtom("a")(pos))(pos)), Nil, Body(List(AtomLit("ok")(pos))))(pos)))(pos)
       val errors = IpcFixtures.replies(
         List(
           "GetFunSpecReply" -> writeToArray(spec),

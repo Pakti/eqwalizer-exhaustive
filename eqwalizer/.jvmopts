@@ -1,0 +1,2 @@
+# Stack needed when deriving recursive codecs for the expanded upstream AST.
+-Xss8m

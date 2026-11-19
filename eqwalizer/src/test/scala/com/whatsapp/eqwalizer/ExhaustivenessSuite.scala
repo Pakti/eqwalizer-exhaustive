@@ -18,7 +18,7 @@ class ExhaustivenessSuite extends munit.FunSuite {
   private def variable(s: String): Pat = PatVar(s)(pos)
   private def wild: Pat = PatWild()(pos)
   private def clause(pats: List[Pat], guards: List[Guard] = Nil, body: List[Expr] = List(AtomLit("ok")(pos))): Clause =
-    Clause(pats, guards, Body(body))(pos)
+    Clause(pats.map(p => SPat(p)(p.pos)), guards, Body(body))(pos)
   private def errors(args: List[Type], clauses: List[Clause]): List[Diagnostic] = {
     val ctx = PipelineContext("regression")
     val id = Id("f", args.size)
