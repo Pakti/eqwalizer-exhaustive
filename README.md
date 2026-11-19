@@ -1,8 +1,8 @@
 **This standalone fork adds conservative exhaustiveness checking, private record
 constructors, and strict comment directives to eqWAlizer. These features are on `main`.**
 
-Upstream baseline: [ELP `2026-10-14` (`b36ba37346a8e6122fd309420cb67886ccc5871c`)](https://github.com/WhatsApp/erlang-language-platform/tree/b36ba37346a8e6122fd309420cb67886ccc5871c/eqwalizer).
-See [the upgrade report](docs/upstream-upgrade-2026-10-14.md) for compatibility,
+Upstream baseline: [ELP `2026-11-16` (`45a9286a9ebb09c04b1daa77834ca9833fb4b0dd`)](https://github.com/WhatsApp/erlang-language-platform/tree/45a9286a9ebb09c04b1daa77834ca9833fb4b0dd/eqwalizer).
+See [the upgrade report](docs/upstream-upgrade-2026-11-16.md) for compatibility,
 customizations, validation results, and future upgrade instructions.
 
 ## Developing this fork
