@@ -92,7 +92,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     coverageFor(
       selType,
       c.clauses,
-      clause => clause.pats.headOption,
+      clause => clause.pats.headOption.map(_.pat),
       selectorAliases(c.expr),
     ) match {
       case Covered(_, Some(uncovered)) =>
@@ -162,13 +162,15 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       case BinOp(_, arg1, arg2) =>
         checkExpr(arg1, env)
         checkExpr(arg2, env)
-      case LComprehension(template, _) =>
-        checkExpr(template, env)
+      case LComprehension(templates, _) =>
+        templates.foreach(checkExpr(_, env))
       case BComprehension(template, _) =>
         checkExpr(template, env)
-      case MComprehension(kTemplate, vTemplate, _) =>
-        checkExpr(kTemplate, env)
-        checkExpr(vTemplate, env)
+      case MComprehension(templates, _) =>
+        templates.foreach { case (key, value) =>
+          checkExpr(key, env)
+          checkExpr(value, env)
+        }
       case Binary(elems) =>
         elems.foreach(elem => checkExpr(elem.expr, env))
       case Catch(arg) =>
@@ -223,7 +225,8 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
     if (clause.pats.size != argTys.size) None
     else {
       val entries = clause.pats.lazyZip(argTys).flatMap {
-        case (PatVar(v), ty) => Some(v -> ty)
+        case (SPat(PatVar(v)), ty) => Some(v -> ty)
+        case (DPat(PatVar(v)), _) => Some(v -> DynamicType)
         case _              => None
       }
       Some(entries.toMap)
@@ -271,6 +274,8 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def functionCoverage(f: FunDecl, argTys: List[Type]): CoverageResult = {
     if (f.clauses.isEmpty || argTys.isEmpty) Covered(Nil)
+    else if (hasDynamicPatterns(f.clauses))
+      Unsupported("dynamic clause patterns are outside the supported subset")
     else if (f.clauses.exists(_.pats.size != argTys.size))
       Unsupported("clause arity does not match the function spec")
     else {
@@ -298,7 +303,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private def singleInterestCoverage(f: FunDecl, argTys: List[Type]): CoverageResult = {
     val attempts = argTys.indices.toList.flatMap { idx =>
       if (otherArgumentsAreVariablesOrWildcards(f.clauses, idx))
-        Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx), Set.empty))
+        Some(idx -> coverageFor(argTys(idx), f.clauses, clause => clause.pats.lift(idx).map(_.pat), Set.empty))
       else None
     }
     attempts.collectFirst { case (_, covered: Covered) => covered } match {
@@ -356,7 +361,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private def productCoveredCells(clause: Clause, cells: List[List[Type]]): Option[List[List[Type]]] = {
     if (clause.guards.nonEmpty) None
     else {
-      val covers = clause.pats.map(simplePatternCover)
+      val covers = clause.pats.map(p => simplePatternCover(p.pat))
       if (!covers.forall(_.isDefined)) None
       else {
         val patternCovers = covers.flatten
@@ -383,15 +388,17 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def finalUnguardedFunctionCatchAll(clauses: List[Clause], arity: Int): Boolean =
     clauses.lastOption.exists(clause =>
-      clause.guards.isEmpty && clause.pats.size == arity && clause.pats.forall(isAnyPattern)
+      clause.guards.isEmpty && clause.pats.size == arity && clause.pats.forall(p => isAnyPattern(p.pat))
     )
 
   private def supportedMultiArgumentClause(clause: Clause, arity: Int): Boolean =
-    clause.pats.size == arity && clause.pats.forall(pat => simplePatternCover(pat).isDefined)
+    clause.pats.size == arity && clause.pats.forall(p => simplePatternCover(p.pat).isDefined)
 
   private def tupleSelectorCatchAllCoverage(selector: Expr, clauses: List[Clause]): Option[CoverageResult] =
     selector match {
-      case Tuple(elems) if finalUnguardedCatchAll(clauses, clause => clause.pats.headOption) =>
+      case _ if hasDynamicPatterns(clauses) =>
+        Some(Unsupported("dynamic clause patterns are outside the supported subset"))
+      case Tuple(elems) if finalUnguardedCatchAll(clauses, clause => clause.pats.headOption.map(_.pat)) =>
         val arity = elems.size
         val nonFinalClauses = clauses.dropRight(1)
         if (nonFinalClauses.forall(supportedTupleSelectorClause(_, arity))) Some(Covered(Nil))
@@ -402,7 +409,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
 
   private def supportedTupleSelectorClause(clause: Clause, arity: Int): Boolean =
     clause.pats match {
-      case pat :: Nil => supportedTupleSelectorPattern(pat, arity)
+      case SPat(pat) :: Nil => supportedTupleSelectorPattern(pat, arity)
       case _          => false
     }
 
@@ -417,7 +424,7 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
   private def otherArgumentsAreVariablesOrWildcards(clauses: List[Clause], selectedIndex: Int): Boolean =
     clauses.forall { clause =>
       clause.pats.zipWithIndex.forall { case (pat, idx) =>
-        idx == selectedIndex || isAnyPattern(pat)
+        idx == selectedIndex || isAnyPattern(pat.pat)
       }
     }
 
@@ -427,13 +434,17 @@ final class ExhaustiveCase(pipelineContext: PipelineContext) {
       case _                     => false
     }
 
+  private def hasDynamicPatterns(clauses: List[Clause]): Boolean =
+    clauses.exists(_.pats.exists(_.isInstanceOf[DPat]))
+
   private def coverageFor(
       selType: Type,
       clauses: List[Clause],
       selectedPattern: Clause => Option[Pat],
       extraAliases: Set[String],
   ): CoverageResult =
-    if (hasUnguardedCatchAll(clauses, selectedPattern)) Covered(Nil)
+    if (hasDynamicPatterns(clauses)) Unsupported("dynamic clause patterns are outside the supported subset")
+    else if (hasUnguardedCatchAll(clauses, selectedPattern)) Covered(Nil)
     else
       binaryCoverageFor(selType, clauses, selectedPattern) match {
         case Some(result) =>

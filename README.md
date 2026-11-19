@@ -1,11 +1,14 @@
 **This standalone fork adds conservative exhaustiveness checking, private record
 constructors, and strict comment directives to eqWAlizer. These features are on `main`.**
 
-Upstream baseline: [ELP `2026-11-16` (`45a9286a9ebb09c04b1daa77834ca9833fb4b0dd`)](https://github.com/WhatsApp/erlang-language-platform/tree/45a9286a9ebb09c04b1daa77834ca9833fb4b0dd/eqwalizer).
-See [the upgrade report](docs/upstream-upgrade-2026-11-16.md) for compatibility,
+Upstream baseline: [ELP `2026-11-19` (`08c6a40b9f09d66e69e23d0154a30e4582ce4f07`)](https://github.com/WhatsApp/erlang-language-platform/tree/08c6a40b9f09d66e69e23d0154a30e4582ce4f07/eqwalizer).
+See [the upgrade report](docs/upstream-upgrade-2026-11-19.md) for compatibility,
 customizations, validation results, and future upgrade instructions.
 
 ## Developing this fork
+
+After switching from an older upstream baseline, run `make clean` once to regenerate
+AST codecs; incremental compilation may retain codecs for the old nested AST.
 
 Use Java 11 or newer (validated here on Java 21), sbt 1.10.10, and the pinned Scala 3.6.4:
 

@@ -1,18 +1,18 @@
 # Project status: eqwalizer-strict
 
-Last reviewed against the code: 2026-11-16.
+Last reviewed against the code: 2026-11-19.
 
-Current upgrade branch: `upgrade/elp-2026-11-16`.
-Fork baseline: `c9ccceeab15a09c10bb211e03e8f50f88a330933`.
-Upstream baseline: ELP tag `2026-11-16`, commit
-`45a9286a9ebb09c04b1daa77834ca9833fb4b0dd`.
+Current upgrade branch: `upgrade/elp-2026-11-19`.
+Fork starting main: `c9ccceeab15a09c10bb211e03e8f50f88a330933`; the validated
+November 16 branch (`235b764f`) is included in this synchronization.
+Upstream baseline: ELP tag `2026-11-19`, commit
+`08c6a40b9f09d66e69e23d0154a30e4582ce4f07`.
 
-The customizations originated on feature branches and were merged into the fork's
-`main`. The upgraded implementation is on the branch above; this document does
-not imply that the upgrade has been merged into `main`.
-The October upgrade is already merged into `main`; this branch contains the
-November delta. See the [upgrade report](docs/upstream-upgrade-2026-11-16.md) for history,
-conflict resolutions, removed compatibility code, and future upgrade procedures.
+The October upgrade and the custom features were already on `main`. This
+synchronization includes the November 16 upgrade and the November 19 delta,
+prepared on the branch above and merged into `main` after validation.
+See the [upgrade report](docs/upstream-upgrade-2026-11-19.md) for protocol changes,
+customization adaptations, validation and remaining limits.
 
 ## Current status
 
@@ -27,9 +27,9 @@ assembled JAR is `eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar`. Analyzing 
 Erlang projects still requires ELP to supply ASTs, specs, types and other IPC data.
 See the [README](README.md) for the executable-wrapper setup.
 
-Validation includes 58 Scala regression tests, JAR assembly, five synthetic
+Validation includes 64 Scala regression tests, JAR assembly, five synthetic
 process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/exhaustiveness/README.md):
-49 source-based examples in nine modules, run through real ELP `2026-11-16` and
+53 source-based examples in ten modules, run through real ELP `2026-11-19` and
 OTP 27.3.4.1. Nine Python tests cover the source suite's runner. The maintainer
 also reported that the upgraded checker works locally. The complete upstream
 ELP/Erlang suite has not been run here; targeted feature tests do not replace it.
@@ -143,7 +143,13 @@ typing must still succeed before this tuple-specific path runs.
 
 ### Patterns and guards
 
-Supported simple patterns are:
+Static clause patterns are wrapped in upstream's `SPat`. Dynamic clause patterns
+(`DPat`, representing `P = :?`) are outside our coverage model and produce an
+explicit skipped-check diagnostic, even when a static catch-all follows. A top-level
+dynamic variable is treated as dynamic when inspecting its body, rather than
+inheriting the narrower static argument spec.
+
+Supported simple patterns inside static wrappers are:
 
 ```text
 _ and variables
@@ -171,7 +177,8 @@ is_record(X, RecordName)
 ```
 
 `is_integer` uses `IntegerType`, `is_float` uses `FloatType`, and `is_number` uses
-their union. `is_record/2` requires a literal record name. `is_record/3`, multiple
+their union. `is_record/2` requires a literal record name. The ordinary upstream checker now
+supports OTP 29 `is_integer/3`; our custom coverage refinement still does not. `is_record/3`, multiple
 tests/guard alternatives, comparisons and arbitrary expressions are unsupported
 for custom refinement. Upstream's ordinary typechecker may support these forms
 independently. Product-space guard refinement is not implemented.
@@ -285,6 +292,8 @@ The target model uses:
 - Type-declaration lookup replies containing `(TypeDecl, List[Variance])`, with
   variance metadata supplied by ELP.
 - The target map codecs, including array encoding for type-map properties.
+- `Clause.pats: List[ClausePat]`, with `SPat`/`DPat` wrappers, and lists of
+  templates in list/map comprehensions. The custom traversal visits all templates.
 - Target `Specifier` names such as `UnsignedInteger`, `Binary` and `Bytes`.
 - Intersection, cons and native-record forms in the ordinary typechecker, even
   where the custom exhaustiveness pass does not support them.
@@ -300,6 +309,7 @@ comment-based contract.
 From the repository root, with Java, sbt and Python 3 available:
 
 ```sh
+make clean               # once when changing the upstream AST/protocol baseline
 make test-upstream
 make build
 make smoke
@@ -308,7 +318,7 @@ make test         # uses your compatible ELP/OTP installation
 make test-runner  # Python-only tests of the annotation/JSON adapter
 ```
 
-`make test-upstream` runs 58 Scala tests covering the supported exhaustiveness paths and
+`make test-upstream` runs 64 Scala tests covering the supported exhaustiveness paths and
 limits, selector calls, numeric separation, directives, private construction and
 allowed reads/patterns, pipeline activation, type/codec changes, type-declaration
 variance replies and free-variable constraints. `make smoke` assembles the JAR and
@@ -330,6 +340,7 @@ expected diagnostics (or `%% @expect-clean`):
 | Supported and unsupported guard refinements | [simple_guards.erl](tests/exhaustiveness/src/simple_guards.erl) |
 | Per-function suppression | [strict_directives.erl](tests/exhaustiveness/src/strict_directives.erl) |
 | Invalid directive diagnostics | [invalid_directives.erl](tests/exhaustiveness/src/invalid_directives.erl) |
+| November 19 protocol and sharpened specs | [november19_compatibility.erl](tests/exhaustiveness/src/november19_compatibility.erl) |
 | November OTP spec compatibility | [release_compatibility.erl](tests/exhaustiveness/src/release_compatibility.erl) |
 | Private constructors through shared headers | [box_owner.erl](tests/exhaustiveness/src/box_owner.erl), [box_client.erl](tests/exhaustiveness/src/box_client.erl), [private_box.hrl](tests/exhaustiveness/include/private_box.hrl) |
 

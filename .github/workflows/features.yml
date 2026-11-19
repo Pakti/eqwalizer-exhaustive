@@ -25,19 +25,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: WhatsApp/erlang-language-platform
-          ref: 45a9286a9ebb09c04b1daa77834ca9833fb4b0dd
+          ref: 08c6a40b9f09d66e69e23d0154a30e4582ce4f07
           path: .upstream-elp
           persist-credentials: false
       - name: Build the fork and test its runner
         run: make build test-runner
-      # This release had no binary assets when synchronized. Build the exact
-      # source revision instead of silently testing against an older ELP release.
+      # Build the exact release source for OTP 27, including its parser/protocol
+      # changes, instead of relying on a binary built for another OTP major.
       - name: Build the pinned ELP release
         shell: bash
         working-directory: .upstream-elp
         env:
           ELP_EQWALIZER_PATH: ${{ github.workspace }}/eqwalizer/target/scala-3.6.4/eqwalizer-strict.jar
-          SOURCE_DATE_EPOCH: '1794844273'
+          SOURCE_DATE_EPOCH: '1795033572'
           CARGO_BUILD_JOBS: '2'
           CARGO_PROFILE_DEV_DEBUG: '0'
         run: |
