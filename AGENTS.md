@@ -4,6 +4,8 @@
 
 - Read [ProjectStatus.md](ProjectStatus.md), the latest report in
   `docs/upstream-upgrade-*.md`, and [the source-test guide](tests/exhaustiveness/README.md).
+- Read [TODO.md](TODO.md) for remaining synchronization improvements #4–#6,
+  their scope, and the context needed to resume work in a later session.
 - Inspect the current branch, working-tree changes and remote refs before editing.
   Preserve user changes and local commits. Do not assume an earlier chat's refs,
   tools, caches or environment processes are still current.
