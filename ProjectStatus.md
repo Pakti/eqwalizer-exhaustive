@@ -1,11 +1,12 @@
 # Project status: eqwalizer-strict
 
-Last reviewed against the code: 2026-11-19.
+Last reviewed against the code: 2026-11-20.
 
 The imported upstream baseline and tested ELP/OTP combination are recorded in
-[`upstream.json`](upstream.json). The latest synchronization is ELP `2026-11-19`,
-merged into `main` and tagged `elp-2026-11-19`. See the
-[upgrade report](docs/upstream-upgrade-2026-11-19.md) for exact commits, protocol
+[`upstream.json`](upstream.json). The latest synchronization is ELP `2026-11-20`,
+merged into `main` and tagged `elp-2026-11-20`. Its checker subtree is unchanged from
+November 19; the custom features and protocol adaptations are retained. See the
+[upgrade report](docs/upstream-upgrade-2026-11-20.md) for exact commits, protocol
 changes, customization adaptations, validation and remaining limits.
 
 ## Current status
@@ -23,10 +24,10 @@ See the [README](README.md) for the executable-wrapper setup.
 
 Validation includes 64 Scala regression tests, JAR assembly, five synthetic
 process/IPC tests, and the fork-owned [literate Erlang feature suite](tests/exhaustiveness/README.md):
-53 source-based examples in ten modules, run through real ELP `2026-11-19` and
-OTP 27.3.4.1. Nine Python tests cover the source suite's runner. The maintainer
-also reported that the upgraded checker works locally. The complete upstream
-ELP/Erlang suite has not been run here; targeted feature tests do not replace it.
+53 source-based examples in ten modules, run through real ELP `2026-11-20` and
+OTP 27.3.4.1. Nine Python tests cover the source suite's runner, and eight offline
+Git tests cover synchronization tooling. The complete upstream ELP/Erlang suite
+has not been run here; targeted feature tests do not replace it.
 
 ## Exhaustiveness checking
 

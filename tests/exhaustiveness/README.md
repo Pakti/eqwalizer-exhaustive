@@ -8,7 +8,7 @@ acceptance tests; they do not alter or depend on upstream's test suite.
 ## Run on Linux Mint
 
 You need Java 11+, sbt 1.10.10, Python 3.9+, Erlang/OTP and ELP.
-The tested combination is ELP **2026-11-19** and OTP **27.3.4.1** on Linux x86_64.
+The tested combination is ELP **2026-11-20** and OTP **27.3.4.1** on Linux x86_64.
 Use an ELP release asset built for your OTP major version. Use the same `erl` and
 `escript` as your working ELP installation, including a source-built installation.
 No system package installation is required by the tests.
@@ -38,13 +38,13 @@ does not install packages, copy sources into your runtime, or modify the OTP tre
 Keep the source tree and selected runtime version aligned. The normal automatic
 path does not add these overrides or impose this directory layout.
 
-Install the [pinned ELP release](https://github.com/WhatsApp/erlang-language-platform/releases/tag/2026-11-19)
+Install the [pinned ELP release](https://github.com/WhatsApp/erlang-language-platform/releases/tag/2026-11-20)
 and verify the downloaded asset's published SHA-256, if binary assets are available.
 For the OTP 27 validation configuration, validation and CI
-built ELP directly from commit `08c6a40b9f09d66e69e23d0154a30e4582ce4f07` using
+built ELP directly from commit `f299499f3e7eeef7b91be3f96e846076083d590f` using
 Rust 1.100.0, rebar3 3.24.0 and `cargo build --locked -p elp --bin elp`.
 `ELP_EQWALIZER_PATH` was set at build time to this fork's assembled JAR, avoiding
-ELP's native-image build. See the [upgrade report](../../docs/upstream-upgrade-2026-11-19.md)
+ELP's native-image build. See the [upgrade report](../../docs/upstream-upgrade-2026-11-20.md)
 for the exact source-build procedure. Rust/rebar3 are needed only if building ELP,
 not when running the suite with an existing compatible ELP executable.
 
