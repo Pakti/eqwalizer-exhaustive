@@ -4,7 +4,7 @@ Last reviewed against the code: 2026-11-20.
 
 The imported upstream baseline and tested ELP/OTP combination are recorded in
 [`upstream.json`](upstream.json). The latest synchronization is ELP `2026-11-20`,
-prepared on `upgrade/elp-2026-11-20`. Its checker subtree is unchanged from
+merged into `main` and tagged `elp-2026-11-20`. Its checker subtree is unchanged from
 November 19; the custom features and protocol adaptations are retained. See the
 [upgrade report](docs/upstream-upgrade-2026-11-20.md) for exact commits, protocol
 changes, customization adaptations, validation and remaining limits.

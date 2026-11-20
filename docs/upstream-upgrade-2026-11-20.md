@@ -67,8 +67,8 @@ recompiled separately for this release.
 its updated ELP commit automatically. Full upstream Rust/Erlang snapshots, Buck,
 daemon/LSP updates, the Unicode OTP-root/locale matrix, the onboarding opt-in
 workflow, native OTP 29 syntax, packaging and GitHub Actions execution were not
-validated here. Merging, tagging and publication remain separate actions; this
-synchronization is committed on the integration branch.
+validated here. The validated integration branch is merged into `main` and
+the resulting commit is tagged `elp-2026-11-20`, as requested by the maintainer.
 
 ## Next synchronization
 
