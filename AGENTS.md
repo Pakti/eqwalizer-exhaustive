@@ -25,7 +25,7 @@ subtree maps to this repository's root**. Consequently upstream's Scala project
 [`upstream.json`](upstream.json) is the authoritative imported baseline and
 separately records the tested ELP/OTP combination. CI reads its ELP pin from it.
 See [the synchronization guide](docs/synchronization.md) for the review/apply tool
-and [the November 19 report](docs/upstream-upgrade-2026-11-19.md) for provenance.
+and [the November 20 report](docs/upstream-upgrade-2026-11-20.md) for provenance.
 Do not maintain another independent current-baseline pin here.
 
 For an upgrade:
